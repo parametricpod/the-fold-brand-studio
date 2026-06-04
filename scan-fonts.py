@@ -24,6 +24,7 @@ ROOT_NAMES = {
     "Grilli-Type-Trial-Fonts-2026-04": "Grilli Type",
     "DINAMO Trial Fonts": "Dinamo",
     "Focal_Collection": "Focal",
+    "KlimTestFonts": "Klim",
 }
 ROOTS = [(os.path.join(DL, n), label) for n, label in ROOT_NAMES.items() if os.path.isdir(os.path.join(DL, n))]
 for p in glob.glob(os.path.join(DL, "DP_trial-*")):      # Displaay trials ship with a uuid suffix

@@ -12,7 +12,7 @@ let io = null;
 let faceCounter = 0;
 
 // strip trial/marketing tokens as whole words only (so "Variable" survives)
-const STRIP = /\s*\b(?:Unlicensed\s+Trial|Trial|TRIAL|Demo|VF|VAR)\b\s*/gi;
+const STRIP = /\s*\b(?:Unlicensed\s+Trial|Trial|TRIAL|Demo|VF|VAR|Test)\b\s*/gi;
 const clean = (s) => s.replace(STRIP, " ").replace(/\s+/g, " ").replace(/[-–\s]+$/, "").trim() || s;
 
 // variable-font axis state: face key -> { axisTag: value }
