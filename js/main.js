@@ -3,6 +3,8 @@
 // palette and a large curated type library.
 import { PALETTES, EXTERIOR, SEASONS, ALL_FONTS, FONTS, DEFAULT_CUSTOM, loadFonts } from "./brand.js";
 import { downloadSVG, downloadPNG } from "./export.js";
+import { loadCurated, varCss } from "./curatedData.js";
+let CURATED = [];
 
 import morph from "./engines/morph.js";
 import blob from "./engines/softBlob.js";
@@ -111,6 +113,8 @@ function renderWordmark() {
   bar.style.color = ink;
   bar.style.fontFamily = state.font.css;
   bar.style.fontWeight = state.font.weight;
+  bar.style.fontStyle = state.font.italic ? "italic" : "normal";
+  bar.style.fontVariationSettings = state.font.instance ? varCss(state.font.instance) : "normal";
   bar.textContent = state.wordmark;
 }
 
@@ -210,9 +214,11 @@ function renderControls() {
   const accentRows = state.custom.accents.map((hex, i) =>
     `<div class="swrow"><input type="color" data-accent="${i}" value="${hex}"><code>${hex}</code><button class="x" data-rmaccent="${i}">×</button></div>`).join("");
 
-  const fontOpts = FONTS.groups.map((g) =>
+  const curatedOpt = CURATED.length ? `<optgroup label="Curated (trial)">` + CURATED.map((f) =>
+      `<option value="cur:${f.id}" ${state.font.curated && state.font.id === f.id ? "selected" : ""}>${f.label}</option>`).join("") + `</optgroup>` : "";
+  const fontOpts = curatedOpt + FONTS.groups.map((g) =>
     `<optgroup label="${g.group}">` + g.faces.map((f) =>
-      `<option value="${f.name}" ${f.name === state.font.name ? "selected" : ""}>${f.name}</option>`).join("") + `</optgroup>`).join("");
+      `<option value="${f.name}" ${!state.font.curated && f.name === state.font.name ? "selected" : ""}>${f.name}</option>`).join("") + `</optgroup>`).join("");
 
   const seasonChips = SEASONS.map((s) =>
     `<button class="season ${state.register === "season" && state.seasonKey === s.key ? "on" : ""}" data-season="${s.key}" style="--c:${s.accent}">${s.label}</button>`).join("");
@@ -255,7 +261,7 @@ function renderControls() {
       <label class="toggle"><span>Show wordmark</span><input type="checkbox" id="wmToggle" ${state.showWordmark ? "checked" : ""}></label>
       <input type="text" id="wmText" value="${state.wordmark}" class="text">
       <select id="fontSel">${fontOpts}</select>
-      <p class="blurb">${state.font.group} · ${ALL_FONTS.length} faces</p>
+      <p class="blurb">${state.font.curated ? "Curated trial · " + state.font.name : (state.font.group || "") + " · " + ALL_FONTS.length + " faces"}</p>
     </section>
 
     <section class="exports">
@@ -306,7 +312,14 @@ function wire() {
 
   const wm = document.getElementById("wmToggle"); if (wm) wm.onchange = () => { state.showWordmark = wm.checked; renderWordmark(); };
   const wt = document.getElementById("wmText"); if (wt) wt.oninput = () => { state.wordmark = wt.value || " "; renderWordmark(); };
-  const fontSel = document.getElementById("fontSel"); if (fontSel) fontSel.onchange = () => { state.font = ALL_FONTS.find((f) => f.name === fontSel.value); renderControls(); renderWordmark(); };
+  const fontSel = document.getElementById("fontSel"); if (fontSel) fontSel.onchange = () => {
+    const v = fontSel.value;
+    if (v.startsWith("cur:")) {
+      const f = CURATED.find((x) => x.id === v.slice(4));
+      if (f) state.font = { name: f.label, css: f.css, weight: f.weight, italic: f.italic, instance: f.instance, curated: true, id: f.id };
+    } else state.font = ALL_FONTS.find((f) => f.name === v);
+    renderControls(); renderWordmark();
+  };
 
   const eSVG = document.getElementById("expSVG"); if (eSVG) eSVG.onclick = () => exportComposition("svg");
   const ePNG = document.getElementById("expPNG"); if (ePNG) ePNG.onclick = () => exportComposition("png");
@@ -317,19 +330,26 @@ function renderAll() { renderControls(); mountStage(); }
 
 renderAll();
 
-// ---- tab switching: Studio <-> Type lab ------------------------------------
-let fontlabInited = false;
-document.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
-  document.querySelectorAll(".tab").forEach((x) => x.classList.remove("on"));
-  b.classList.add("on");
-  const studioEl = document.getElementById("studioView");
-  const fontlabEl = document.getElementById("fontlabView");
-  if (b.dataset.view === "fontlab") {
-    studioEl.hidden = true; fontlabEl.hidden = false;
-    if (controller) { controller.destroy(); controller = null; } // pause studio animation
-    if (!fontlabInited) { fontlabInited = true; import("./fontlab.js").then((m) => m.init(fontlabEl)); }
-  } else {
-    fontlabEl.hidden = true; studioEl.hidden = false;
-    mountStage(); // remount the studio engine
-  }
+// load the curated shortlist, then add it to the wordmark picker
+loadCurated().then((c) => { CURATED = c.faces; if (CURATED.length) renderControls(); });
+
+// ---- tab switching: Studio | Curated | Type lab ----------------------------
+const VIEWS = { studio: "studioView", curated: "curatedView", fontlab: "fontlabView" };
+const inited = {};
+function showView(view) {
+  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("on", x.dataset.view === view));
+  Object.entries(VIEWS).forEach(([k, id]) => { document.getElementById(id).hidden = k !== view; });
+  if (view === "studio") { mountStage(); }
+  else if (controller) { controller.destroy(); controller = null; } // pause studio animation
+  if (view === "curated" && !inited.curated) { inited.curated = true; import("./curated.js").then((m) => m.init(document.getElementById("curatedView"))); }
+  if (view === "fontlab" && !inited.fontlab) { inited.fontlab = true; import("./fontlab.js").then((m) => m.init(document.getElementById("fontlabView"))); }
+}
+document.querySelectorAll(".tab").forEach((b) => b.onclick = () => showView(b.dataset.view));
+
+// "Use in wordmark" from the Curated tab -> set the Studio's wordmark font
+window.addEventListener("fold:useFont", (e) => {
+  const f = e.detail;
+  state.font = { name: f.label, css: f.css, weight: f.weight, italic: f.italic, instance: f.instance, curated: true, id: f.id };
+  showView("studio");
+  renderControls(); renderWordmark();
 });

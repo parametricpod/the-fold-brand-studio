@@ -1,6 +1,7 @@
 node_modules
 .DS_Store
 
-# Trial fonts — licensed, never publish. Local curation only.
+# Trial fonts + configs that reference them — licensed, never publish. Local only.
 fonts/
 fonts-manifest.json
+curated-fonts.json

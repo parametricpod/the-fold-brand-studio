@@ -21,7 +21,7 @@ const AXIS_LABEL = { wght: "Weight", wdth: "Width", slnt: "Slant", opsz: "Optica
   GRAD: "Grade", CNTR: "Contrast", MONO: "Mono", CASL: "Casual", INKT: "Ink trap", BULL: "Bullet",
   ROND: "Round", soft: "Soft", SOFT: "Soft", YTAS: "Ascender", XTRA: "Width" };
 const defaultsFrom = (axes) => Object.fromEntries(Object.entries(axes).map(([t, a]) => [t, a[1]]));
-const varCss = (s) => Object.entries(s).map(([t, v]) => `"${t}" ${v}`).join(", ");
+const varCss = (s) => Object.entries(s).map(([t, v]) => `'${t}' ${v}`).join(", ");
 
 function axisBlock(key, axes) {
   const rows = Object.entries(axes).map(([tag, [mn, df, mx]]) => {
