@@ -1,9 +1,7 @@
 // brand.js — single source of truth for The Fold's brand data.
-// Palettes and typography pulled verbatim from the May 2026 Creative Brief
-// and the technosphere vault (02 Brand and Voice/Color System.md).
+// Palettes/typography from the May 2026 Creative Brief + technosphere vault.
 
 export const PALETTES = {
-  // Version 1 — JessyKate's colors, marked *preferred* in the brief.
   v1: {
     label: "JessyKate · preferred",
     swatches: [
@@ -13,29 +11,21 @@ export const PALETTES = {
       { name: "Deep blue", hex: "#171D60" },
     ],
   },
-  // Version 2 — Eileen's contrast adjustment.
   v2: {
     label: "Eileen · contrast",
     swatches: [
-      { name: "Red-orange",   hex: "#ED461D" },
-      { name: "Golden",       hex: "#F2B450" },
-      { name: "Light green",  hex: "#A8D39C" },
-      { name: "Off-white",    hex: "#ECE6E4" },
-      { name: "Blue",         hex: "#1DB1ED" },
-      { name: "Purple",       hex: "#51225D" },
+      { name: "Red-orange",  hex: "#ED461D" },
+      { name: "Golden",      hex: "#F2B450" },
+      { name: "Light green", hex: "#A8D39C" },
+      { name: "Off-white",   hex: "#ECE6E4" },
+      { name: "Blue",        hex: "#1DB1ED" },
+      { name: "Purple",      hex: "#51225D" },
     ],
   },
 };
 
-// The exterior register: black ground, warm gold leaf. Constant across seasons.
-export const EXTERIOR = {
-  ground: "#14130F",
-  gold:   "#C8973F",   // warm, not yellow — references actual gold leaf
-  goldHi: "#E8C57A",
-};
+export const EXTERIOR = { ground: "#14130F", gold: "#C8973F", goldHi: "#E8C57A" };
 
-// Seasonal "Line" system: structure constant, color is the variable.
-// Each season picks an accent from the active palette's world.
 export const SEASONS = [
   { key: "spring", label: "Spring", accent: "#73C49F", ground: "#ECE6E4", ink: "#171D60" },
   { key: "summer", label: "Summer", accent: "#EEA541", ground: "#FBF4E9", ink: "#ED591D" },
@@ -43,32 +33,72 @@ export const SEASONS = [
   { key: "winter", label: "Winter", accent: "#1DB1ED", ground: "#EEF1F2", ink: "#171D60" },
 ];
 
-// Curated OFL typefaces. The brief asks for a high-contrast serif/display face
-// with formal weight, paired with a warm readable body — "brasserie menu
-// confidence, not tech startup." Everything here is Open Font License and on
-// Google Fonts so the tool stays dependency-light and the team can actually use it.
+// A large, curated OFL type library on Google Fonts. Grouped so the picker can
+// show optgroups. The brief leans high-contrast serif/display + characterful;
+// industrial/condensed and a few grotesques are included for range. Avoid the
+// generic-geometric-sans "WeWork" zone — none of those are here.
 export const FONTS = {
-  display: [
-    { name: "Fraunces",        css: "'Fraunces', serif",          note: "high-contrast 'old-style' soft serif — warmth + authority", weight: 600, gf: "Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900" },
-    { name: "Instrument Serif",css: "'Instrument Serif', serif",  note: "elegant high-contrast display — quiet confidence",          weight: 400, gf: "Instrument+Serif" },
-    { name: "Bodoni Moda",     css: "'Bodoni Moda', serif",       note: "didone contrast — institutional, printed-menu",            weight: 700, gf: "Bodoni+Moda:opsz,wght@6..96,400;6..96,700;6..96,900" },
-    { name: "Big Shoulders",   css: "'Big Shoulders Display', sans-serif", note: "condensed industrial display — signage energy",   weight: 700, gf: "Big+Shoulders+Display:wght@400;700;900" },
-    { name: "Redaction",       css: "'Redaction', serif",         note: "degraded printed quality — craft + edge",                  weight: 400, gf: "Redaction:wght@400;700" },
-    { name: "Unifraktur",      css: "'UnifrakturCook', cursive",  note: "blackletter nod to the existing gilded sign",              weight: 700, gf: "UnifrakturCook:wght@700" },
-  ],
-  body: [
-    { name: "Geist",     css: "'Geist', sans-serif",     note: "the brief's pick — expansive, neutral, modern", weight: 400, gf: "Geist:wght@300;400;500;700" },
-    { name: "Newsreader",css: "'Newsreader', serif",     note: "warm reading serif — long-form interior copy",  weight: 400, gf: "Newsreader:opsz,wght@6..72,400;6..72,500" },
-    { name: "Fraunces",  css: "'Fraunces', serif",       note: "pairs display+body in one superfamily",         weight: 400, gf: null },
+  groups: [
+    { group: "High-contrast serif", faces: [
+      { name: "Fraunces",          weight: 600 },
+      { name: "Playfair Display",  weight: 700 },
+      { name: "Bodoni Moda",       weight: 700 },
+      { name: "DM Serif Display",  weight: 400 },
+      { name: "Abril Fatface",     weight: 400 },
+      { name: "Cormorant Garamond",weight: 600 },
+      { name: "Prata",             weight: 400 },
+      { name: "Rozha One",         weight: 400 },
+      { name: "Gilda Display",     weight: 400 },
+      { name: "Italiana",          weight: 400 },
+    ]},
+    { group: "Display & character", faces: [
+      { name: "Instrument Serif",  weight: 400 },
+      { name: "Marcellus",         weight: 400 },
+      { name: "Yeseva One",        weight: 400 },
+      { name: "Bona Nova SC",      weight: 700 },
+      { name: "Redaction",         weight: 400 },
+      { name: "Cardo",             weight: 700 },
+      { name: "Spectral",          weight: 600 },
+      { name: "Newsreader",        weight: 500 },
+    ]},
+    { group: "Industrial & condensed", faces: [
+      { name: "Big Shoulders Display", weight: 700 },
+      { name: "Anton",             weight: 400 },
+      { name: "Oswald",            weight: 600 },
+      { name: "Archivo Black",     weight: 400 },
+      { name: "Bebas Neue",        weight: 400 },
+      { name: "Saira Condensed",   weight: 700 },
+    ]},
+    { group: "Solarpunk & edge", faces: [
+      { name: "Space Grotesk",     weight: 600 },
+      { name: "Syne",              weight: 700 },
+      { name: "Unbounded",         weight: 600 },
+      { name: "UnifrakturCook",    weight: 700 },
+      { name: "Monoton",           weight: 400 },
+      { name: "Silkscreen",        weight: 400 },
+    ]},
   ],
 };
 
-// A small helper to build the Google Fonts <link> URL from the sets above.
-export function googleFontsHref() {
-  const families = new Set();
-  for (const f of [...FONTS.display, ...FONTS.body]) {
-    if (f.gf) families.add(f.gf);
-  }
-  const params = [...families].map((f) => `family=${f}`).join("&");
-  return `https://fonts.googleapis.com/css2?${params}&display=swap`;
+// Flat list with usable css family strings.
+export const ALL_FONTS = FONTS.groups.flatMap((g) =>
+  g.faces.map((f) => ({ ...f, group: g.group, css: `'${f.name}', serif` }))
+);
+
+// Inject the Google Fonts stylesheet for the whole library. Plain family names
+// (default weights) keep the request resilient — every face here ships a regular.
+export function loadFonts() {
+  const families = ALL_FONTS.map((f) => `family=${f.name.replace(/ /g, "+")}:wght@${f.weight}`).join("&");
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = `https://fonts.googleapis.com/css2?${families}&display=swap`;
+  document.head.appendChild(link);
 }
+
+// Default editable custom palette — seeded from the preferred (v1) palette, with
+// the brand's cream ground and deep-blue ink, so the editor opens on-brand.
+export const DEFAULT_CUSTOM = {
+  accents: ["#ED591D", "#EEA541", "#73C49F", "#171D60"],
+  ground: "#ECE6E4",
+  ink: "#171D60",
+};

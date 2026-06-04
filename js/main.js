@@ -1,161 +1,218 @@
-// main.js — The Fold Brand Studio. Composes a live mark + "THE FOLD" wordmark
-// lockup from six generative engines, across the brand's color registers.
-import { PALETTES, EXTERIOR, SEASONS, FONTS } from "./brand.js";
+// main.js — The Fold Brand Studio. Live mark + "THE FOLD" wordmark lockup across
+// nine engines (SVG generative + canvas/SVG physics & morph), with an editable
+// palette and a large curated type library.
+import { PALETTES, EXTERIOR, SEASONS, ALL_FONTS, FONTS, DEFAULT_CUSTOM, loadFonts } from "./brand.js";
 import { downloadSVG, downloadPNG } from "./export.js";
 
+import morph from "./engines/morph.js";
+import blob from "./engines/softBlob.js";
+import cloth from "./engines/cloth.js";
 import fold from "./engines/foldedSurface.js";
+import flow from "./engines/flowField.js";
 import quilt from "./engines/quilt.js";
 import graph from "./engines/graph.js";
-import flow from "./engines/flowField.js";
-import draw from "./engines/handdraw.js";
 import wrap from "./engines/pointFold.js";
+import draw from "./engines/handdraw.js";
 
-const ENGINES = [fold, quilt, graph, flow, wrap, draw];
-const STAGE = 1080;          // mark coordinate space (square)
-const LOCKH = 220;           // wordmark band height
-const VBH = STAGE + LOCKH;
+loadFonts();
 
-// ---- state -----------------------------------------------------------------
+const ENGINES = [morph, blob, cloth, fold, flow, quilt, graph, wrap, draw];
+const STAGE = 1080;
+const WMH = 240;
+
 const state = {
-  engineId: "fold",
-  params: {},                // params[engineId] = {key: value}
-  data: {},                  // interactive data per engine
-  paletteKey: "v1",
-  register: "interior",      // interior | exterior | season
+  engineId: "morph",
+  params: {},
+  data: {},
+  register: "custom",                       // interior | exterior | season | custom
   seasonKey: "spring",
+  custom: structuredClone(DEFAULT_CUSTOM),
   seed: 7,
-  font: FONTS.display[0],
+  font: ALL_FONTS[0],
   showWordmark: true,
   wordmark: "THE FOLD",
 };
-
-// init default params + interactive data
 for (const e of ENGINES) {
   state.params[e.id] = Object.fromEntries(e.params.map((p) => [p.key, p.default]));
   if (e.interactive === "draw") state.data[e.id] = { strokes: [] };
   if (e.interactive === "points") state.data[e.id] = { points: [] };
 }
-
 const engine = () => ENGINES.find((e) => e.id === state.engineId);
+let controller = null;
 
-// ---- color resolution ------------------------------------------------------
+// ---- colors ----------------------------------------------------------------
 function resolveColors() {
-  const pal = PALETTES[state.paletteKey].swatches.map((s) => s.hex);
+  if (state.register === "custom") {
+    return { ground: state.custom.ground, ink: state.custom.ink, colors: state.custom.accents.slice() };
+  }
   if (state.register === "exterior") {
     return { ground: EXTERIOR.ground, ink: EXTERIOR.goldHi, colors: [EXTERIOR.gold, EXTERIOR.goldHi] };
   }
   if (state.register === "season") {
     const s = SEASONS.find((x) => x.key === state.seasonKey);
+    const pal = state.custom.accents;
     return { ground: s.ground, ink: s.ink, colors: [s.accent, ...pal.filter((c) => c !== s.accent)] };
   }
-  // interior: cream ground, deep-blue ink, full jewel palette
-  const ink = state.paletteKey === "v1" ? "#171D60" : "#51225D";
-  return { ground: state.paletteKey === "v1" ? "#ECE6E4" : "#ECE6E4", ink, colors: pal.filter((c) => c.toLowerCase() !== "#ece6e4") };
+  return { ground: "#ECE6E4", ink: "#171D60", colors: PALETTES.v1.swatches.map((s) => s.hex) };
+}
+function ctx() {
+  const { ground, ink, colors } = resolveColors();
+  return { w: STAGE, h: STAGE, params: state.params[state.engineId], colors, ink, ground, seed: state.seed, data: state.data[state.engineId] };
 }
 
-// ---- composition -----------------------------------------------------------
-function compose() {
+// ---- mark area (SVG engines emit strings; live engines mount themselves) ----
+function svgMarkComposition(c) {
   const e = engine();
-  const { ground, ink, colors } = resolveColors();
-  const p = state.params[e.id];
-  const markInner = e.render({ w: STAGE, h: STAGE, p, colors, ink, ground, seed: state.seed, data: state.data[e.id] });
-
-  const showWM = state.showWordmark;
-  const vbH = showWM ? VBH : STAGE;
-  let wordmark = "";
-  if (showWM) {
-    const fs = 150;
-    wordmark = `<g transform="translate(${STAGE / 2} ${STAGE + LOCKH * 0.62})">
-      <text text-anchor="middle" font-family="${state.font.css}" font-weight="${state.font.weight}"
-            font-size="${fs}" letter-spacing="6" fill="${ink}">${state.wordmark}</text>
-    </g>`;
-  }
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${STAGE} ${vbH}" id="composition">
-    <rect x="0" y="0" width="${STAGE}" height="${vbH}" fill="${ground}"/>
-    <g id="mark">${markInner}</g>
-    ${wordmark}
+  const inner = e.render({ ...c, data: state.data[e.id] });
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${STAGE} ${STAGE}" id="composition" style="width:100%;height:100%;display:block">
+    <rect width="${STAGE}" height="${STAGE}" fill="${c.ground}"/>
+    <g id="mark">${inner}</g>
   </svg>`;
 }
 
-function renderStage() {
-  const stage = document.getElementById("stage");
-  stage.innerHTML = compose();
-  attachPointer();
+function mountStage() {
+  const e = engine();
+  const c = ctx();
+  const host = document.getElementById("markHost");
+  if (controller) { controller.destroy(); controller = null; }
+  host.style.background = c.ground;
+  if (e.kind === "live") {
+    host.innerHTML = "";
+    controller = e.mount(host, c);
+  } else {
+    host.innerHTML = svgMarkComposition(c);
+    attachPointer();
+  }
+  renderWordmark();
 }
 
-// ---- pointer interaction for draw / points engines -------------------------
+function updateMark() {
+  const e = engine();
+  const c = ctx();
+  document.getElementById("markHost").style.background = c.ground;
+  if (e.kind === "live") { controller && controller.update(c); }
+  else { document.getElementById("markHost").innerHTML = svgMarkComposition(c); attachPointer(); }
+}
+
+function renderWordmark() {
+  const bar = document.getElementById("wordmarkBar");
+  const { ground, ink } = resolveColors();
+  bar.style.background = ground;
+  bar.style.display = state.showWordmark ? "flex" : "none";
+  bar.style.color = ink;
+  bar.style.fontFamily = state.font.css;
+  bar.style.fontWeight = state.font.weight;
+  bar.textContent = state.wordmark;
+}
+
+// ---- pointer for interactive SVG engines (draw / points) -------------------
 let drawing = false;
 function svgPoint(evt) {
   const svg = document.getElementById("composition");
   const r = svg.getBoundingClientRect();
-  const x = ((evt.clientX - r.left) / r.width) * STAGE;
-  const y = ((evt.clientY - r.top) / r.height) * (state.showWordmark ? VBH : STAGE);
-  return { x, y };
+  return { x: ((evt.clientX - r.left) / r.width) * STAGE, y: ((evt.clientY - r.top) / r.height) * STAGE };
 }
 function attachPointer() {
   const e = engine();
   const svg = document.getElementById("composition");
-  if (!e.interactive) { svg.style.cursor = "default"; return; }
+  if (!svg || !e.interactive) { if (svg) svg.style.cursor = "default"; return; }
   svg.style.cursor = "crosshair";
   if (e.interactive === "points") {
-    svg.addEventListener("pointerdown", (ev) => {
-      const pt = svgPoint(ev);
-      if (pt.y > STAGE) return;
-      state.data[e.id].points.push(pt);
-      renderStage();
-    });
+    svg.onpointerdown = (ev) => { state.data[e.id].points.push(svgPoint(ev)); updateMark(); };
   }
   if (e.interactive === "draw") {
-    svg.addEventListener("pointerdown", (ev) => {
-      const pt = svgPoint(ev); if (pt.y > STAGE) return;
-      drawing = true; state.data[e.id].strokes.push([pt]);
-      svg.setPointerCapture(ev.pointerId);
-    });
-    svg.addEventListener("pointermove", (ev) => {
-      if (!drawing) return;
-      const s = state.data[e.id].strokes;
-      s[s.length - 1].push(svgPoint(ev));
-      renderStage();
-    });
-    svg.addEventListener("pointerup", () => { drawing = false; });
+    svg.onpointerdown = (ev) => { drawing = true; state.data[e.id].strokes.push([svgPoint(ev)]); svg.setPointerCapture(ev.pointerId); };
+    svg.onpointermove = (ev) => { if (!drawing) return; const s = state.data[e.id].strokes; s[s.length - 1].push(svgPoint(ev)); updateMark(); };
+    svg.onpointerup = () => { drawing = false; };
   }
 }
 
-// ---- controls UI -----------------------------------------------------------
+// ---- export ----------------------------------------------------------------
+function exportComposition(kind) {
+  const e = engine();
+  const c = ctx();
+  const wmH = state.showWordmark ? WMH : 0;
+  const totalH = STAGE + wmH;
+  const wmSvg = state.showWordmark
+    ? `<text x="${STAGE / 2}" y="${STAGE + WMH * 0.62}" text-anchor="middle" font-family="${state.font.css}" font-weight="${state.font.weight}" font-size="150" letter-spacing="6" fill="${c.ink}">${state.wordmark}</text>`
+    : "";
+
+  // Vector path: SVG engines and live engines exposing snapshotSVG.
+  const markSVG = e.kind === "live" ? (controller && controller.snapshotSVG && controller.snapshotSVG()) : e.render({ ...c, data: state.data[e.id] });
+  const markVB = e.kind === "live" && controller && controller.viewBox ? controller.viewBox : `0 0 ${STAGE} ${STAGE}`;
+
+  if (kind === "svg" && markSVG) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", `0 0 ${STAGE} ${totalH}`);
+    svg.innerHTML = `<rect width="${STAGE}" height="${totalH}" fill="${c.ground}"/>
+      <svg x="0" y="0" width="${STAGE}" height="${STAGE}" viewBox="${markVB}">${markSVG}</svg>${wmSvg}`;
+    downloadSVG(svg, `the-fold-${e.id}-${state.seed}.svg`);
+    return;
+  }
+  // Raster path (canvas live engines, or PNG button).
+  const scale = 2;
+  const out = document.createElement("canvas");
+  out.width = STAGE * scale; out.height = totalH * scale;
+  const o = out.getContext("2d"); o.scale(scale, scale);
+  o.fillStyle = c.ground; o.fillRect(0, 0, STAGE, totalH);
+  if (e.kind === "live" && controller && controller.snapshotCanvas) {
+    o.drawImage(controller.snapshotCanvas(), 0, 0, STAGE, STAGE);
+  } else if (markSVG) {
+    // rasterize vector mark
+    const tmp = `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${markVB}" width="${STAGE}" height="${STAGE}">${markSVG}</svg>`);
+    const img = new Image();
+    img.onload = () => { o.drawImage(img, 0, 0, STAGE, STAGE); finishPNG(o, c, wmH); };
+    img.src = tmp; return;
+  }
+  finishPNG(o, c, wmH, out);
+}
+function finishPNG(o, c, wmH, out) {
+  if (state.showWordmark) {
+    o.fillStyle = c.ink; o.textAlign = "center";
+    o.font = `${state.font.weight} 150px ${state.font.css}`;
+    o.fillText(state.wordmark, STAGE / 2, STAGE + WMH * 0.62);
+  }
+  const canvas = out || o.canvas;
+  canvas.toBlob((b) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(b); a.download = `the-fold-${state.engineId}-${state.seed}.png`; a.click();
+  }, "image/png");
+}
+
+// ---- controls --------------------------------------------------------------
 function renderControls() {
   const e = engine();
-  const c = document.getElementById("controls");
   const p = state.params[e.id];
+  const c = document.getElementById("controls");
 
   const engineBtns = ENGINES.map((x) =>
-    `<button class="chip ${x.id === state.engineId ? "on" : ""}" data-engine="${x.id}">${x.label}</button>`
-  ).join("");
+    `<button class="chip ${x.id === state.engineId ? "on" : ""}" data-engine="${x.id}">${x.label}${x.kind === "live" ? " ◆" : ""}</button>`).join("");
 
   const sliders = e.params.map((pr) => {
     const isToggle = pr.min === 0 && pr.max === 1 && pr.step === 1;
     const v = p[pr.key];
-    if (isToggle) {
-      return `<label class="toggle"><span>${pr.label}</span>
-        <input type="checkbox" data-param="${pr.key}" ${v ? "checked" : ""}></label>`;
-    }
-    return `<label class="slider"><span>${pr.label}<em>${v}</em></span>
-      <input type="range" data-param="${pr.key}" min="${pr.min}" max="${pr.max}" step="${pr.step}" value="${v}"></label>`;
+    if (isToggle) return `<label class="toggle"><span>${pr.label}</span><input type="checkbox" data-param="${pr.key}" ${v ? "checked" : ""}></label>`;
+    return `<label class="slider"><span>${pr.label}<em>${v}</em></span><input type="range" data-param="${pr.key}" min="${pr.min}" max="${pr.max}" step="${pr.step}" value="${v}"></label>`;
   }).join("");
 
-  const interactiveTools = e.interactive
-    ? `<button class="ghost" id="clearData">Clear ${e.interactive === "draw" ? "drawing" : "points"}</button>` : "";
+  const interactiveTools = e.interactive ? `<button class="ghost" id="clearData">Clear ${e.interactive === "draw" ? "drawing" : "points"}</button>` : "";
 
-  const fontOpts = FONTS.display.map((f) =>
-    `<option value="${f.name}" ${f.name === state.font.name ? "selected" : ""}>${f.name}</option>`).join("");
+  const accentRows = state.custom.accents.map((hex, i) =>
+    `<div class="swrow"><input type="color" data-accent="${i}" value="${hex}"><code>${hex}</code><button class="x" data-rmaccent="${i}">×</button></div>`).join("");
+
+  const fontOpts = FONTS.groups.map((g) =>
+    `<optgroup label="${g.group}">` + g.faces.map((f) =>
+      `<option value="${f.name}" ${f.name === state.font.name ? "selected" : ""}>${f.name}</option>`).join("") + `</optgroup>`).join("");
 
   const seasonChips = SEASONS.map((s) =>
-    `<button class="season ${state.register === "season" && state.seasonKey === s.key ? "on" : ""}"
-       data-season="${s.key}" style="--c:${s.accent}">${s.label}</button>`).join("");
+    `<button class="season ${state.register === "season" && state.seasonKey === s.key ? "on" : ""}" data-season="${s.key}" style="--c:${s.accent}">${s.label}</button>`).join("");
+
+  const svgExportable = e.kind !== "live" || (controller && controller.snapshotSVG);
 
   c.innerHTML = `
     <section>
-      <h3>Mark engine</h3>
+      <div class="ttl">THE FOLD · STUDIO</div>
+      <h3>Engine</h3>
       <div class="chips">${engineBtns}</div>
       <p class="blurb">${e.blurb}</p>
     </section>
@@ -163,96 +220,82 @@ function renderControls() {
     <section>
       <h3>Parameters</h3>
       ${sliders}
-      <div class="row">
-        <button class="ghost" id="regen">⟳ New seed</button>
-        ${interactiveTools}
-      </div>
+      <div class="row"><button class="ghost" id="regen">⟳ New seed</button>${interactiveTools}</div>
     </section>
 
     <section>
-      <h3>Color register</h3>
-      <div class="chips">
-        <button class="chip ${state.register === "interior" ? "on" : ""}" data-register="interior">Interior</button>
-        <button class="chip ${state.register === "exterior" ? "on" : ""}" data-register="exterior">Exterior · gold/black</button>
+      <h3>Palette <span class="tag ${state.register === "custom" ? "on" : ""}">custom</span></h3>
+      <div class="palette-editor">${accentRows}</div>
+      <button class="ghost sm" id="addAccent">+ color</button>
+      <div class="swrow gi"><span>Ground</span><input type="color" id="cGround" value="${state.custom.ground}"></div>
+      <div class="swrow gi"><span>Ink</span><input type="color" id="cInk" value="${state.custom.ink}"></div>
+      <div class="row">
+        <button class="ghost sm" data-load="v1">Load v1</button>
+        <button class="ghost sm" data-load="v2">Load v2</button>
+        <button class="ghost sm" data-register="exterior">Gold/Black</button>
       </div>
-      <div class="chips palettes">
-        <button class="chip ${state.paletteKey === "v1" ? "on" : ""}" data-palette="v1">${PALETTES.v1.label}</button>
-        <button class="chip ${state.paletteKey === "v2" ? "on" : ""}" data-palette="v2">${PALETTES.v2.label}</button>
-      </div>
-      <div class="swatches">${PALETTES[state.paletteKey].swatches.map((s) =>
-        `<span title="${s.name} ${s.hex}" style="background:${s.hex}"></span>`).join("")}</div>
       <h4>Seasonal line</h4>
       <div class="seasons">${seasonChips}</div>
     </section>
 
     <section>
       <h3>Wordmark</h3>
-      <label class="toggle"><span>Show “THE FOLD”</span>
-        <input type="checkbox" id="wmToggle" ${state.showWordmark ? "checked" : ""}></label>
+      <label class="toggle"><span>Show wordmark</span><input type="checkbox" id="wmToggle" ${state.showWordmark ? "checked" : ""}></label>
+      <input type="text" id="wmText" value="${state.wordmark}" class="text">
       <select id="fontSel">${fontOpts}</select>
-      <p class="blurb" id="fontNote">${state.font.note}</p>
+      <p class="blurb">${state.font.group} · ${ALL_FONTS.length} faces</p>
     </section>
 
     <section class="exports">
-      <button class="primary" id="expSVG">Export SVG</button>
-      <button class="ghost" id="expPNG">PNG</button>
-    </section>
-  `;
-  wireControls();
+      ${svgExportable ? `<button class="primary" id="expSVG">Export SVG</button>` : ""}
+      <button class="${svgExportable ? "ghost" : "primary"}" id="expPNG">PNG</button>
+    </section>`;
+  wire();
 }
 
-function wireControls() {
+function wire() {
   const e = engine();
-  document.querySelectorAll("[data-engine]").forEach((b) =>
-    b.onclick = () => { state.engineId = b.dataset.engine; renderAll(); });
+  document.querySelectorAll("[data-engine]").forEach((b) => b.onclick = () => { state.engineId = b.dataset.engine; renderAll(); });
 
-  document.querySelectorAll("[data-param]").forEach((inp) => {
-    inp.oninput = () => {
-      const key = inp.dataset.param;
-      state.params[e.id][key] = inp.type === "checkbox" ? (inp.checked ? 1 : 0) : Number(inp.value);
-      // Update only the live value label — never rebuild the panel mid-drag, or
-      // the slider element is replaced and the drag is interrupted.
-      if (inp.type === "range") {
-        const em = inp.parentElement.querySelector("em");
-        if (em) em.textContent = inp.value;
-      }
-      renderStage();
-    };
+  document.querySelectorAll("[data-param]").forEach((inp) => inp.oninput = () => {
+    state.params[e.id][inp.dataset.param] = inp.type === "checkbox" ? (inp.checked ? 1 : 0) : Number(inp.value);
+    if (inp.type === "range") { const em = inp.parentElement.querySelector("em"); if (em) em.textContent = inp.value; }
+    updateMark();
   });
 
-  document.querySelectorAll("[data-register]").forEach((b) =>
-    b.onclick = () => { state.register = b.dataset.register; renderAll(); });
-  document.querySelectorAll("[data-palette]").forEach((b) =>
-    b.onclick = () => { state.paletteKey = b.dataset.palette; renderAll(); });
-  document.querySelectorAll("[data-season]").forEach((b) =>
-    b.onclick = () => { state.register = "season"; state.seasonKey = b.dataset.season; renderAll(); });
+  // palette editor
+  document.querySelectorAll("[data-accent]").forEach((inp) => inp.oninput = () => {
+    state.custom.accents[+inp.dataset.accent] = inp.value; state.register = "custom";
+    inp.parentElement.querySelector("code").textContent = inp.value; updateMark(); renderWordmark(); markCustom();
+  });
+  document.querySelectorAll("[data-rmaccent]").forEach((b) => b.onclick = () => {
+    if (state.custom.accents.length <= 1) return;
+    state.custom.accents.splice(+b.dataset.rmaccent, 1); state.register = "custom"; renderControls(); updateMark();
+  });
+  const add = document.getElementById("addAccent");
+  if (add) add.onclick = () => { state.custom.accents.push("#888888"); state.register = "custom"; renderControls(); updateMark(); };
+  const cg = document.getElementById("cGround"); if (cg) cg.oninput = () => { state.custom.ground = cg.value; state.register = "custom"; updateMark(); renderWordmark(); markCustom(); };
+  const ci = document.getElementById("cInk"); if (ci) ci.oninput = () => { state.custom.ink = ci.value; state.register = "custom"; updateMark(); renderWordmark(); markCustom(); };
+  document.querySelectorAll("[data-load]").forEach((b) => b.onclick = () => {
+    const pal = PALETTES[b.dataset.load].swatches.map((s) => s.hex);
+    state.custom.accents = pal.filter((h) => h.toLowerCase() !== "#ece6e4");
+    state.register = "custom"; renderAll();
+  });
+  document.querySelectorAll("[data-register]").forEach((b) => b.onclick = () => { state.register = b.dataset.register; renderAll(); });
+  document.querySelectorAll("[data-season]").forEach((b) => b.onclick = () => { state.register = "season"; state.seasonKey = b.dataset.season; renderAll(); });
 
-  const regen = document.getElementById("regen");
-  if (regen) regen.onclick = () => { state.seed = Math.floor(Math.random() * 99999); renderStage(); };
+  const regen = document.getElementById("regen"); if (regen) regen.onclick = () => { state.seed = Math.floor(Math.random() * 99999); updateMark(); };
+  const clear = document.getElementById("clearData"); if (clear) clear.onclick = () => { if (e.interactive === "draw") state.data[e.id].strokes = []; if (e.interactive === "points") state.data[e.id].points = []; updateMark(); };
 
-  const clear = document.getElementById("clearData");
-  if (clear) clear.onclick = () => {
-    if (e.interactive === "draw") state.data[e.id].strokes = [];
-    if (e.interactive === "points") state.data[e.id].points = [];
-    renderStage();
-  };
+  const wm = document.getElementById("wmToggle"); if (wm) wm.onchange = () => { state.showWordmark = wm.checked; renderWordmark(); };
+  const wt = document.getElementById("wmText"); if (wt) wt.oninput = () => { state.wordmark = wt.value || " "; renderWordmark(); };
+  const fontSel = document.getElementById("fontSel"); if (fontSel) fontSel.onchange = () => { state.font = ALL_FONTS.find((f) => f.name === fontSel.value); renderControls(); renderWordmark(); };
 
-  const wm = document.getElementById("wmToggle");
-  if (wm) wm.onchange = () => { state.showWordmark = wm.checked; renderStage(); };
-
-  const fontSel = document.getElementById("fontSel");
-  if (fontSel) fontSel.onchange = () => {
-    state.font = FONTS.display.find((f) => f.name === fontSel.value);
-    renderControls(); renderStage();
-  };
-
-  document.getElementById("expSVG").onclick = () =>
-    downloadSVG(document.getElementById("composition"), `the-fold-${state.engineId}-${state.seed}.svg`);
-  document.getElementById("expPNG").onclick = () =>
-    downloadPNG(document.getElementById("composition"), `the-fold-${state.engineId}-${state.seed}.png`);
+  const eSVG = document.getElementById("expSVG"); if (eSVG) eSVG.onclick = () => exportComposition("svg");
+  const ePNG = document.getElementById("expPNG"); if (ePNG) ePNG.onclick = () => exportComposition("png");
 }
 
-function renderAll() { renderControls(); renderStage(); }
+function markCustom() { const t = document.querySelector(".tag"); if (t) t.classList.add("on"); }
+function renderAll() { renderControls(); mountStage(); }
 
-// ---- boot ------------------------------------------------------------------
 renderAll();

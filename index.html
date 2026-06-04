@@ -4,33 +4,31 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>The Fold — Brand Studio</title>
-  <meta name="description" content="A live generative studio for The Fold's brand: dial fonts, colors, and parametric marks." />
+  <meta name="description" content="A live generative studio for The Fold's brand: physics, morphing, type, and color." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Instrument+Serif&family=Bodoni+Moda:opsz,wght@6..96,400;6..96,700;6..96,900&family=Big+Shoulders+Display:wght@400;700;900&family=Redaction:wght@400;700&family=UnifrakturCook:wght@700&family=Geist:wght@300;400;500;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
+  <script type="importmap">
+  {
+    "imports": {
+      "flubber": "https://esm.sh/flubber@0.4.2",
+      "animejs": "https://esm.sh/animejs@3.2.2",
+      "three": "https://esm.sh/three@0.160.0",
+      "paper": "https://esm.sh/paper@0.12.17"
+    }
+  }
+  </script>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header>
-    <div class="brandline">
-      <span class="mono">JUBILEE STUDIO · BRAND SPRINT</span>
-      <h1>The&nbsp;Fold <span>Brand Studio</span></h1>
-      <p class="sub">A live tool for exploring marks, type, and color together — geometric and organic, in one place.</p>
-    </div>
-  </header>
-
   <main>
     <div id="stageWrap">
-      <div id="stage" aria-label="Live brand preview"></div>
-      <p class="stagecaption mono">Live preview · marks export as clean vector SVG</p>
+      <div id="stage" aria-label="Live brand preview">
+        <div id="markHost"></div>
+        <div id="wordmarkBar"></div>
+      </div>
     </div>
     <aside id="controls"></aside>
   </main>
-
-  <footer class="mono">
-    Exploratory tool · built for the Technosphere sprint · structure constant, color variable
-  </footer>
-
   <script type="module" src="js/main.js"></script>
 </body>
 </html>
