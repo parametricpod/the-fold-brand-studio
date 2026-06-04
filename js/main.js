@@ -6,25 +6,21 @@ import { downloadSVG, downloadPNG } from "./export.js";
 import { loadCurated, varCss } from "./curatedData.js";
 let CURATED = [];
 
-import morph from "./engines/morph.js";
-import blob from "./engines/softBlob.js";
 import cloth from "./engines/cloth.js";
 import ribbon from "./engines/ribbon3d.js";
 import scope from "./engines/oscilloscope.js";
 import flow from "./engines/flowField.js";
 import quilt from "./engines/quilt.js";
 import graph from "./engines/graph.js";
-import wrap from "./engines/pointFold.js";
-import draw from "./engines/handdraw.js";
 
 loadFonts();
 
-const ENGINES = [morph, blob, cloth, ribbon, scope, flow, quilt, graph, wrap, draw];
+const ENGINES = [scope, ribbon, cloth, flow, quilt, graph];
 const STAGE = 1080;
 const WMH = 240;
 
 const state = {
-  engineId: "morph",
+  engineId: "scope",
   params: {},
   data: {},
   register: "custom",                       // interior | exterior | season | custom
