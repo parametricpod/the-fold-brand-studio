@@ -316,3 +316,20 @@ function markCustom() { const t = document.querySelector(".tag"); if (t) t.class
 function renderAll() { renderControls(); mountStage(); }
 
 renderAll();
+
+// ---- tab switching: Studio <-> Type lab ------------------------------------
+let fontlabInited = false;
+document.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".tab").forEach((x) => x.classList.remove("on"));
+  b.classList.add("on");
+  const studioEl = document.getElementById("studioView");
+  const fontlabEl = document.getElementById("fontlabView");
+  if (b.dataset.view === "fontlab") {
+    studioEl.hidden = true; fontlabEl.hidden = false;
+    if (controller) { controller.destroy(); controller = null; } // pause studio animation
+    if (!fontlabInited) { fontlabInited = true; import("./fontlab.js").then((m) => m.init(fontlabEl)); }
+  } else {
+    fontlabEl.hidden = true; studioEl.hidden = false;
+    mountStage(); // remount the studio engine
+  }
+});

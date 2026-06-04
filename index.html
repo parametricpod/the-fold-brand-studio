@@ -20,7 +20,15 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <main>
+  <nav id="topnav">
+    <div class="tabs">
+      <button class="tab on" data-view="studio">Studio</button>
+      <button class="tab" data-view="fontlab">Type&nbsp;lab</button>
+    </div>
+    <span class="navmark">THE FOLD · BRAND STUDIO</span>
+  </nav>
+
+  <main id="studioView">
     <div id="stageWrap">
       <div id="stage" aria-label="Live brand preview">
         <div id="markHost"></div>
@@ -29,6 +37,9 @@
     </div>
     <aside id="controls"></aside>
   </main>
+
+  <section id="fontlabView" hidden></section>
+
   <script type="module" src="js/main.js"></script>
 </body>
 </html>
