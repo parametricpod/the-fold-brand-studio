@@ -1,0 +1,182 @@
+/* The Fold Brand Studio — the UI itself honors the dual register:
+   exterior black + gold leaf chrome, interior warm jewel-toned panel. */
+
+:root {
+  --ground: #14130f;        /* exterior black */
+  --gold:   #c8973f;
+  --goldhi: #e8c57a;
+  --cream:  #ece6e4;        /* interior off-white */
+  --ink:    #171d60;        /* deep blue */
+  --panel:  #f4efe9;
+  --line:   #2a2823;
+  --radius: 14px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: "Geist", system-ui, sans-serif;
+  background: var(--ground);
+  color: var(--cream);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.mono {
+  font-family: "Geist", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+/* ---- header --------------------------------------------------------------- */
+header {
+  padding: 34px 40px 22px;
+  border-bottom: 1px solid var(--line);
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(200,151,63,0.10), transparent 55%),
+    var(--ground);
+}
+.brandline h1 {
+  font-family: "Fraunces", serif;
+  font-weight: 900;
+  font-size: clamp(30px, 4vw, 52px);
+  letter-spacing: 0.01em;
+  color: var(--goldhi);
+  margin: 8px 0 6px;
+  line-height: 1;
+}
+.brandline h1 span {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--cream);
+  opacity: 0.85;
+}
+.brandline .sub { color: #cbc4bd; max-width: 60ch; font-size: 14px; }
+
+/* ---- layout --------------------------------------------------------------- */
+main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 0;
+  align-items: stretch;
+}
+
+#stageWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 36px;
+  background:
+    radial-gradient(80% 80% at 50% 30%, rgba(255,255,255,0.03), transparent),
+    var(--ground);
+}
+#stage {
+  width: min(64vh, 100%);
+  max-width: 640px;
+  aspect-ratio: 1080 / 1300;
+  background: var(--cream);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.45), 0 0 0 1px rgba(200,151,63,0.25);
+  overflow: hidden;
+}
+#stage svg { width: 100%; height: 100%; display: block; touch-action: none; }
+.stagecaption { opacity: 0.7; }
+
+/* ---- controls panel ------------------------------------------------------- */
+#controls {
+  background: var(--panel);
+  color: #1c1a16;
+  padding: 26px 24px 40px;
+  overflow-y: auto;
+  border-left: 1px solid var(--line);
+  max-height: calc(100vh - 0px);
+}
+#controls section { padding: 16px 0; border-bottom: 1px solid #e2d9d0; }
+#controls section:last-child { border: 0; }
+#controls h3 {
+  font-family: "Fraunces", serif;
+  font-size: 15px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  color: #6b3f12; margin-bottom: 12px;
+}
+#controls h4 {
+  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: #8a7d6f; margin: 16px 0 8px;
+}
+.blurb { font-size: 12.5px; color: #6f655a; line-height: 1.45; margin-top: 8px; }
+
+/* chips / buttons */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chips.palettes { margin-top: 8px; }
+.chip {
+  font: inherit; font-size: 12.5px;
+  border: 1px solid #cdbfb1; background: #fff; color: #3a342c;
+  padding: 7px 12px; border-radius: 999px; cursor: pointer;
+  transition: all 0.14s ease;
+}
+.chip:hover { border-color: var(--gold); }
+.chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+/* sliders */
+.slider { display: block; margin: 12px 0; }
+.slider span { display: flex; justify-content: space-between; font-size: 12.5px; color: #4a4239; margin-bottom: 5px; }
+.slider em { font-style: normal; color: var(--ink); font-variant-numeric: tabular-nums; }
+input[type=range] {
+  width: 100%; -webkit-appearance: none; height: 4px; border-radius: 4px;
+  background: #d9cdbf; outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--ink); cursor: pointer; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+}
+
+.toggle { display: flex; justify-content: space-between; align-items: center; margin: 10px 0; font-size: 13px; color: #4a4239; }
+.toggle input { width: 18px; height: 18px; accent-color: var(--ink); }
+
+.row { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.ghost {
+  font: inherit; font-size: 12px; padding: 8px 12px; border-radius: 8px;
+  background: transparent; border: 1px solid #c2b4a4; color: #5a5046; cursor: pointer;
+}
+.ghost:hover { border-color: var(--gold); color: var(--ink); }
+
+/* swatches + seasons */
+.swatches { display: flex; gap: 6px; margin-top: 12px; }
+.swatches span { width: 28px; height: 28px; border-radius: 6px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08); }
+.seasons { display: flex; gap: 7px; }
+.season {
+  font: inherit; font-size: 11.5px; cursor: pointer;
+  padding: 6px 10px; border-radius: 8px; background: #fff;
+  border: 1px solid #cdbfb1; color: #3a342c;
+  border-left: 4px solid var(--c);
+}
+.season.on { background: var(--c); color: #fff; border-color: var(--c); }
+
+select {
+  width: 100%; font: inherit; font-size: 13px; padding: 9px 10px;
+  border-radius: 8px; border: 1px solid #cdbfb1; background: #fff; margin-top: 10px;
+}
+
+/* exports */
+.exports { display: flex; gap: 10px; }
+.primary {
+  flex: 1; font: inherit; font-weight: 600; font-size: 14px;
+  padding: 12px; border-radius: 10px; cursor: pointer;
+  background: var(--ink); color: #fff; border: 0;
+}
+.primary:hover { background: #0f1448; }
+.exports .ghost { padding: 12px 18px; }
+
+footer { padding: 16px 40px; border-top: 1px solid var(--line); opacity: 0.7; }
+
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; }
+  #controls { border-left: 0; border-top: 1px solid var(--line); max-height: none; }
+  #stage { width: 100%; }
+}
