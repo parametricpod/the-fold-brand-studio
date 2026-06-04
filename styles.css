@@ -34,22 +34,28 @@ body { font-family: "Geist", system-ui, sans-serif; background: var(--ground); c
 .cur-empty p { margin: 10px 0; line-height: 1.5; }
 .cur-empty pre, .cur-empty code { background: #e7ddd2; padding: 2px 6px; border-radius: 5px; font-size: 13px; }
 .cur-empty pre { padding: 10px 14px; }
-.cur-bar { position: sticky; top: 0; z-index: 5; background: #efe7dd; border-bottom: 1px solid #ddd0c2; padding: 12px 22px; display: flex; gap: 14px; align-items: center; }
-.cur-count { font-size: 12.5px; color: #6f655a; }
+.cur-bar { position: sticky; top: 0; z-index: 5; background: #efe7dd; border-bottom: 1px solid #ddd0c2; padding: 12px 24px; display: flex; gap: 16px; align-items: center; }
+#cur-sample { flex: 1; }
+.cur-size { display: flex; align-items: center; gap: 9px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #8a7d6f; }
+.cur-size input[type=range] { width: 150px; }
+.cur-size i { font-style: normal; font-variant-numeric: tabular-nums; color: var(--ink); width: 30px; text-align: right; }
 .cur-hint { font-size: 11px; color: #9a8d7d; margin-left: auto; letter-spacing: .03em; }
-.cur-body { padding: 8px 22px 70px; }
-.cur-group { margin-top: 18px; }
-.cur-role { font-family: "Fraunces", serif; font-size: 13px; text-transform: uppercase; letter-spacing: .14em; color: #6b3f12; border-bottom: 1px solid #e0d5c8; padding-bottom: 7px; margin-bottom: 14px; }
-.cur-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 16px; }
-.cur-card { background: #fff; border: 1px solid #e6dccf; border-radius: 12px; padding: 20px 22px 16px; position: relative; }
-.cur-prev { font-size: 46px; line-height: 1.05; color: #14130f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cur-second { font-size: 16px; color: #5a5046; margin-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cur-meta { margin-top: 14px; display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-.cur-fam { font-size: 13px; font-weight: 600; color: #2b2620; }
-.cur-style { color: #9a8d7d; font-weight: 400; }
-.cur-sub { font-size: 11px; color: #9a8d7d; }
-.cur-use { margin-top: 14px; font: inherit; font-size: 12px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--ink); background: var(--ink); color: #fff; cursor: pointer; }
-.cur-use:hover { background: #0f1448; }
+
+.cur-list { padding: 0 0 80px; }
+.cur-rolebar { font-family: "Fraunces", serif; font-size: 11px; text-transform: uppercase; letter-spacing: .16em; color: #8a6a2a; padding: 22px 24px 6px; }
+.cur-row { padding: 16px 24px; border-bottom: 1px solid #e7ddd0; }
+.cur-row:hover { background: #f1ebe2; }
+.cur-prev { font-size: var(--cur-size, 72px); line-height: 1.1; color: #141008; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cur-foot { display: flex; align-items: center; gap: 16px; margin-top: 10px; flex-wrap: wrap; }
+.cur-label { font-size: 11.5px; color: #9a8d7d; }
+.cur-label i { font-style: normal; color: #6f655a; }
+.cur-axes { display: flex; gap: 16px; flex-wrap: wrap; }
+.cur-ax { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: #8a7d6f; }
+.cur-ax b { font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: #6b3f12; }
+.cur-ax input[type=range] { width: 92px; }
+.cur-ax i { font-style: normal; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 26px; }
+.cur-use { margin-left: auto; font: inherit; font-size: 11.5px; padding: 6px 12px; border-radius: 7px; border: 1px solid #c2b4a4; background: #fff; color: #4a4239; cursor: pointer; }
+.cur-use:hover { border-color: var(--ink); color: var(--ink); }
 
 /* ---- Type lab ------------------------------------------------------------- */
 .fl-loading, .fl-empty { padding: 48px; color: #6f655a; max-width: 680px; }
