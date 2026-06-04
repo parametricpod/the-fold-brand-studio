@@ -7,6 +7,7 @@ import { downloadSVG, downloadPNG } from "./export.js";
 import morph from "./engines/morph.js";
 import blob from "./engines/softBlob.js";
 import cloth from "./engines/cloth.js";
+import ribbon from "./engines/ribbon3d.js";
 import fold from "./engines/foldedSurface.js";
 import flow from "./engines/flowField.js";
 import quilt from "./engines/quilt.js";
@@ -16,7 +17,7 @@ import draw from "./engines/handdraw.js";
 
 loadFonts();
 
-const ENGINES = [morph, blob, cloth, fold, flow, quilt, graph, wrap, draw];
+const ENGINES = [morph, blob, cloth, ribbon, fold, flow, quilt, graph, wrap, draw];
 const STAGE = 1080;
 const WMH = 240;
 
@@ -27,6 +28,8 @@ const state = {
   register: "custom",                       // interior | exterior | season | custom
   seasonKey: "spring",
   custom: structuredClone(DEFAULT_CUSTOM),
+  bw: false,
+  bwInvert: false,
   seed: 7,
   font: ALL_FONTS[0],
   showWordmark: true,
@@ -42,6 +45,11 @@ let controller = null;
 
 // ---- colors ----------------------------------------------------------------
 function resolveColors() {
+  if (state.bw) {
+    return state.bwInvert
+      ? { ground: "#111111", ink: "#f2f2f2", colors: ["#f2f2f2", "#bdbdbd"] }
+      : { ground: "#ffffff", ink: "#141414", colors: ["#1a1a1a", "#6e6e6e"] };
+  }
   if (state.register === "custom") {
     return { ground: state.custom.ground, ink: state.custom.ink, colors: state.custom.accents.slice() };
   }
@@ -225,8 +233,10 @@ function renderControls() {
     </section>
 
     <section>
-      <h3>Palette <span class="tag ${state.register === "custom" ? "on" : ""}">custom</span></h3>
-      <div class="palette-editor">${accentRows}</div>
+      <h3>Palette <span class="tag ${state.bw ? "on" : (state.register === "custom" ? "on" : "")}">${state.bw ? "b&w" : "custom"}</span></h3>
+      <label class="toggle"><span>Black &amp; white</span><input type="checkbox" id="bwToggle" ${state.bw ? "checked" : ""}></label>
+      ${state.bw ? `<label class="toggle"><span>Invert (white on black)</span><input type="checkbox" id="bwInvert" ${state.bwInvert ? "checked" : ""}></label>` : ""}
+      <div class="palette-editor" ${state.bw ? 'style="opacity:.4;pointer-events:none"' : ""}>${accentRows}</div>
       <button class="ghost sm" id="addAccent">+ color</button>
       <div class="swrow gi"><span>Ground</span><input type="color" id="cGround" value="${state.custom.ground}"></div>
       <div class="swrow gi"><span>Ink</span><input type="color" id="cInk" value="${state.custom.ink}"></div>
@@ -287,6 +297,9 @@ function wire() {
 
   const regen = document.getElementById("regen"); if (regen) regen.onclick = () => { state.seed = Math.floor(Math.random() * 99999); updateMark(); };
   const clear = document.getElementById("clearData"); if (clear) clear.onclick = () => { if (e.interactive === "draw") state.data[e.id].strokes = []; if (e.interactive === "points") state.data[e.id].points = []; updateMark(); };
+
+  const bw = document.getElementById("bwToggle"); if (bw) bw.onchange = () => { state.bw = bw.checked; renderControls(); updateMark(); renderWordmark(); };
+  const bwi = document.getElementById("bwInvert"); if (bwi) bwi.onchange = () => { state.bwInvert = bwi.checked; updateMark(); renderWordmark(); };
 
   const wm = document.getElementById("wmToggle"); if (wm) wm.onchange = () => { state.showWordmark = wm.checked; renderWordmark(); };
   const wt = document.getElementById("wmText"); if (wt) wt.oninput = () => { state.wordmark = wt.value || " "; renderWordmark(); };

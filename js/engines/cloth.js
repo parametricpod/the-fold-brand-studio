@@ -2,6 +2,9 @@
 // gravity with wind, draggable. Rendered as a shaded fabric surface. The literal
 // "Fold" — cloth caught mid-breath — as real-time physics.
 import { liveCanvas } from "../live.js";
+import { rng } from "../util.js";
+
+function windPhases(seed) { const r = rng((seed || 1) >>> 0); return [r() * 6.283, r() * 6.283, r() * 6.283, r() * 6.283]; }
 
 export default {
   id: "cloth",
@@ -16,11 +19,13 @@ export default {
     { key: "stiff",  label: "Stiffness",    min: 1,  max: 5,  step: 1,    default: 3 },
     { key: "shade",  label: "Shading",      min: 0,  max: 1,  step: 0.01, default: 0.8 },
     { key: "pins",   label: "Pin count",    min: 2,  max: 8,  step: 1,    default: 3 },
+    { key: "editPins", label: "Edit pins (click)", min: 0, max: 1, step: 1, default: 0 },
   ],
 
   mount(host, ctx) {
     let P = ctx.params, colors = ctx.colors, ink = ctx.ink, ground = ctx.ground;
     let pts = [], links = [], cols = 0, rows = 0, spacing = 0, grabbed = null, built = -1;
+    let ph = windPhases(ctx.seed);
 
     function build(w, h) {
       cols = Math.round(P.cols);
@@ -52,18 +57,30 @@ export default {
         if (pointer.justDown) {
           let bd = 1e9, bi = null;
           for (let i = 0; i < pts.length; i++) { const d = Math.hypot(pts[i].x - pointer.x, pts[i].y - pointer.y); if (d < bd) { bd = d; bi = i; } }
-          grabbed = bd < spacing * 1.5 ? bi : null;
+          if (bd < spacing * 1.5) {
+            if (P.editPins) { // click toggles a pin at the nearest node
+              const p = pts[bi]; p.pin = !p.pin; p.ox = p.x; p.oy = p.y; grabbed = null;
+            } else grabbed = bi;
+          } else grabbed = null;
         }
         if (!pointer.down) grabbed = null;
 
-        const wind = Math.sin(t * 1.4) * P.wind * 0.9 + P.wind * 0.3;
+        // turbulent, seeded multi-octave wind with per-frame gusts + a little lift
+        const windX = P.wind * (0.55 * Math.sin(t * 1.3 + ph[0]) + 0.35 * Math.sin(t * 3.1 + ph[1]) + 0.3 * Math.sin(t * 0.6 + ph[2]))
+                    + P.wind * (Math.random() - 0.5) * 0.7;
+        const windY = P.wind * 0.22 * Math.sin(t * 2.2 + ph[3]);
         for (const p of pts) {
           if (p.pin) { p.x = p.ox; p.y = p.oy; continue; }
           let vx = (p.x - p.px) * 0.98, vy = (p.y - p.py) * 0.98;
           p.px = p.x; p.py = p.y;
-          p.x += vx + wind; p.y += vy + P.gravity;
+          p.x += vx + windX; p.y += vy + windY + P.gravity;
         }
-        if (grabbed != null && pointer.down) { pts[grabbed].x = pointer.x; pts[grabbed].y = pointer.y; pts[grabbed].px = pointer.x; pts[grabbed].py = pointer.y; }
+        // dragging: a pinned node relocates its anchor; a free node is pulled
+        if (grabbed != null && pointer.down) {
+          const g = pts[grabbed];
+          if (g.pin) { g.ox = pointer.x; g.oy = pointer.y; g.x = pointer.x; g.y = pointer.y; }
+          else { g.x = pointer.x; g.y = pointer.y; g.px = pointer.x; g.py = pointer.y; }
+        }
 
         const passes = Math.round(P.stiff);
         for (let s = 0; s < passes; s++) {
@@ -100,7 +117,7 @@ export default {
     });
 
     return {
-      update(nc) { P = nc.params; colors = nc.colors; ink = nc.ink; ground = nc.ground; },
+      update(nc) { P = nc.params; colors = nc.colors; ink = nc.ink; ground = nc.ground; ph = windPhases(nc.seed); },
       destroy() { live.stop(); },
       snapshotCanvas() { return live.canvas; },
     };
