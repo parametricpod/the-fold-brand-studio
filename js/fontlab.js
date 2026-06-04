@@ -15,6 +15,35 @@ let faceCounter = 0;
 const STRIP = /\s*\b(?:Unlicensed\s+Trial|Trial|TRIAL|Demo|VF|VAR)\b\s*/gi;
 const clean = (s) => s.replace(STRIP, " ").replace(/\s+/g, " ").replace(/[-–\s]+$/, "").trim() || s;
 
+// variable-font axis state: face key -> { axisTag: value }
+const varSettings = {};
+const AXIS_LABEL = { wght: "Weight", wdth: "Width", slnt: "Slant", opsz: "Optical", ital: "Italic",
+  GRAD: "Grade", CNTR: "Contrast", MONO: "Mono", CASL: "Casual", INKT: "Ink trap", BULL: "Bullet",
+  ROND: "Round", soft: "Soft", SOFT: "Soft", YTAS: "Ascender", XTRA: "Width" };
+const defaultsFrom = (axes) => Object.fromEntries(Object.entries(axes).map(([t, a]) => [t, a[1]]));
+const varCss = (s) => Object.entries(s).map(([t, v]) => `"${t}" ${v}`).join(", ");
+
+function axisBlock(key, axes) {
+  const rows = Object.entries(axes).map(([tag, [mn, df, mx]]) => {
+    const v = (varSettings[key] && varSettings[key][tag] != null) ? varSettings[key][tag] : df;
+    const step = (mx - mn) >= 20 ? 1 : (mx - mn) >= 2 ? 0.5 : 0.05;
+    return `<div class="vaxis"><span class="vaxis-tag" title="${tag}">${AXIS_LABEL[tag] || tag}</span>
+      <input type="range" data-vaxis="${tag}" data-key="${key}" min="${mn}" max="${mx}" step="${step}" value="${v}">
+      <span class="vaxis-val">${v}</span></div>`;
+  }).join("");
+  return `<div class="vaxes" data-vaxes="${key}">${rows}</div>`;
+}
+
+function applyVar(key) {
+  const s = varSettings[key]; if (!s) return;
+  const css = varCss(s);
+  const label = document.querySelector(`.face[data-key="${key}"]`);
+  if (!label) return;
+  const fp = label.querySelector(".face-prev"); if (fp) fp.style.fontVariationSettings = css;
+  const fam = label.closest(".fam"); const famp = fam && fam.querySelector(".fam-prev");
+  if (famp) famp.style.fontVariationSettings = css;
+}
+
 function guessRole(family) {
   const f = family.toLowerCase();
   if (f.includes("mono")) return "mono";
@@ -87,7 +116,7 @@ function familyRow(fam) {
       </div>
       <div class="fam-prev tl-prev" data-file="${fam.faces[Math.floor(fam.faces.length / 2)].file}"
            data-wght="${fam.variable ? (fam.axes.wght ? fam.axes.wght[1] : 400) : fam.faces[Math.floor(fam.faces.length/2)].weight}"
-           data-var="${fam.variable ? 1 : 0}">${sampleText}</div>
+           data-var="${fam.variable ? 1 : 0}"${fam.variable && Object.keys(fam.axes).length ? ` style="font-variation-settings:${varCss(defaultsFrom(fam.axes))}"` : ""}>${sampleText}</div>
       <select class="fam-role" data-role="${fam.id}">
         ${["display", "body", "mono", "accent", "skip"].map((r) => `<option value="${r}" ${roles[fam.id] === r ? "selected" : ""}>${r}</option>`).join("")}
       </select>
@@ -102,12 +131,16 @@ function faceRows(fam) {
     const key = `${fam.id}::${i}`;
     // the style name usually already carries "Italic" — only add it if missing
     const styleLabel = clean(fc.style) + (fc.italic && !/italic|oblique/i.test(fc.style) ? " Italic" : "");
-    return `<label class="face ${selected.has(key) ? "sel" : ""}" data-key="${key}">
+    const isVar = fc.variable && fam.axes && Object.keys(fam.axes).length;
+    if (isVar && !varSettings[key]) varSettings[key] = defaultsFrom(fam.axes);
+    const varStyle = isVar ? ` style="font-variation-settings:${varCss(varSettings[key])}"` : "";
+    const row = `<label class="face ${selected.has(key) ? "sel" : ""}" data-key="${key}">
       <input type="checkbox" data-face="${key}" ${selected.has(key) ? "checked" : ""}>
-      <span class="face-w">${fc.weight}</span>
-      <span class="face-s">${styleLabel}${fc.variable ? " · var" : ""}</span>
-      <span class="face-prev tl-prev" data-file="${fc.file}" data-wght="${fc.weight}" data-var="${fc.variable ? 1 : 0}" data-italic="${fc.italic ? 1 : 0}">${sampleText}</span>
+      <span class="face-w">${fc.variable ? "VAR" : fc.weight}</span>
+      <span class="face-s">${styleLabel}${fc.variable ? " · variable" : ""}</span>
+      <span class="face-prev tl-prev" data-file="${fc.file}" data-wght="${isVar ? (fam.axes.wght ? fam.axes.wght[1] : 400) : fc.weight}" data-var="${fc.variable ? 1 : 0}" data-italic="${fc.italic ? 1 : 0}"${varStyle}>${sampleText}</span>
     </label>`;
+    return isVar ? row + axisBlock(key, fam.axes) : row;
   }).join("");
 }
 
@@ -166,10 +199,22 @@ function wire(host) {
       const fam = MANIFEST.families.find((x) => x.id === id);
       const box = list.querySelector(`[data-faces="${id}"]`);
       if (box.hidden) {
-        if (!box.dataset.built) { box.innerHTML = faceRows(fam); box.dataset.built = "1"; observePreviews(box); }
+        if (!box.dataset.built) {
+          box.innerHTML = faceRows(fam); box.dataset.built = "1"; observePreviews(box);
+          fam.faces.forEach((fc, i) => { if (fc.variable) applyVar(`${fam.id}::${i}`); });
+        }
         box.hidden = false; exp.textContent = "▾";
       } else { box.hidden = true; exp.textContent = "▸"; }
     }
+  });
+
+  list.addEventListener("input", (e) => {
+    const ax = e.target.closest("[data-vaxis]");
+    if (!ax) return;
+    const key = ax.dataset.key, tag = ax.dataset.vaxis;
+    (varSettings[key] = varSettings[key] || {})[tag] = Number(ax.value);
+    const val = ax.parentElement.querySelector(".vaxis-val"); if (val) val.textContent = ax.value;
+    applyVar(key);
   });
 
   list.addEventListener("change", (e) => {
@@ -219,7 +264,9 @@ function buildJSON() {
     const fc = fam.faces[+idx];
     const name = clean(fam.family);
     byFam[famId] = byFam[famId] || { foundry: fam.foundry, family: name, role: roles[famId], variable: fam.variable, axes: fam.axes, cssFamily: name, faces: [] };
-    byFam[famId].faces.push({ style: clean(fc.style), weight: fc.weight, italic: fc.italic, variable: fc.variable });
+    const face = { style: clean(fc.style), weight: fc.weight, italic: fc.italic, variable: fc.variable };
+    if (fc.variable && fam.axes && Object.keys(fam.axes).length) face.instance = varSettings[key] || defaultsFrom(fam.axes);
+    byFam[famId].faces.push(face);
   }
   return JSON.stringify({
     project: "The Fold",
