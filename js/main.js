@@ -63,7 +63,8 @@ function ctx() {
 // ---- mark area (SVG engines emit strings; live engines mount themselves) ----
 function svgMarkComposition(c) {
   const e = engine();
-  const inner = e.render({ ...c, data: state.data[e.id] });
+  // SVG engines destructure `p` (params); live engines read `params`. Pass both.
+  const inner = e.render({ ...c, p: c.params, data: state.data[e.id] });
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${STAGE} ${STAGE}" id="composition" style="width:100%;height:100%;display:block">
     <rect width="${STAGE}" height="${STAGE}" fill="${c.ground}"/>
     <g id="mark">${inner}</g>
@@ -138,7 +139,7 @@ function exportComposition(kind) {
     : "";
 
   // Vector path: SVG engines and live engines exposing snapshotSVG.
-  const markSVG = e.kind === "live" ? (controller && controller.snapshotSVG && controller.snapshotSVG()) : e.render({ ...c, data: state.data[e.id] });
+  const markSVG = e.kind === "live" ? (controller && controller.snapshotSVG && controller.snapshotSVG()) : e.render({ ...c, p: c.params, data: state.data[e.id] });
   const markVB = e.kind === "live" && controller && controller.viewBox ? controller.viewBox : `0 0 ${STAGE} ${STAGE}`;
 
   if (kind === "svg" && markSVG) {
