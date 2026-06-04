@@ -198,8 +198,9 @@ function renderControls() {
     `<button class="chip ${x.id === state.engineId ? "on" : ""}" data-engine="${x.id}">${x.label}${x.kind === "live" ? " ◆" : ""}</button>`).join("");
 
   const sliders = e.params.map((pr) => {
-    const isToggle = pr.min === 0 && pr.max === 1 && pr.step === 1;
     const v = p[pr.key];
+    if (pr.type === "color") return `<label class="swrow gi"><span>${pr.label}</span><input type="color" data-param="${pr.key}" value="${v}"><code>${v}</code></label>`;
+    const isToggle = pr.min === 0 && pr.max === 1 && pr.step === 1;
     if (isToggle) return `<label class="toggle"><span>${pr.label}</span><input type="checkbox" data-param="${pr.key}" ${v ? "checked" : ""}></label>`;
     return `<label class="slider"><span>${pr.label}<em>${v}</em></span><input type="range" data-param="${pr.key}" min="${pr.min}" max="${pr.max}" step="${pr.step}" value="${v}"></label>`;
   }).join("");
@@ -259,7 +260,7 @@ function renderControls() {
 
     <section class="exports">
       ${svgExportable ? `<button class="primary" id="expSVG">Export SVG</button>` : ""}
-      <button class="${svgExportable ? "ghost" : "primary"}" id="expPNG">PNG</button>
+      <button class="${svgExportable ? "ghost" : "primary"}" id="expPNG">${e.kind === "live" ? "⤓ Freeze frame" : "PNG"}</button>
     </section>`;
   wire();
 }
@@ -269,8 +270,10 @@ function wire() {
   document.querySelectorAll("[data-engine]").forEach((b) => b.onclick = () => { state.engineId = b.dataset.engine; renderAll(); });
 
   document.querySelectorAll("[data-param]").forEach((inp) => inp.oninput = () => {
-    state.params[e.id][inp.dataset.param] = inp.type === "checkbox" ? (inp.checked ? 1 : 0) : Number(inp.value);
+    const val = inp.type === "checkbox" ? (inp.checked ? 1 : 0) : inp.type === "color" ? inp.value : Number(inp.value);
+    state.params[e.id][inp.dataset.param] = val;
     if (inp.type === "range") { const em = inp.parentElement.querySelector("em"); if (em) em.textContent = inp.value; }
+    if (inp.type === "color") { const cd = inp.parentElement.querySelector("code"); if (cd) cd.textContent = inp.value; }
     updateMark();
   });
 
