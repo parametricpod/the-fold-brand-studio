@@ -106,7 +106,7 @@ function renderWordmark() {
   const bar = document.getElementById("wordmarkBar");
   const { ground, ink } = resolveColors();
   bar.style.background = ground;
-  bar.style.display = state.showWordmark ? "flex" : "none";
+  bar.style.display = (state.showWordmark && !engine().hideWordmark) ? "flex" : "none";
   bar.style.color = ink;
   bar.style.fontFamily = state.font.css;
   bar.style.fontWeight = state.font.weight;
@@ -141,9 +141,10 @@ function attachPointer() {
 function exportComposition(kind) {
   const e = engine();
   const c = ctx();
-  const wmH = state.showWordmark ? WMH : 0;
+  const showWM = state.showWordmark && !e.hideWordmark;
+  const wmH = showWM ? WMH : 0;
   const totalH = STAGE + wmH;
-  const wmSvg = state.showWordmark
+  const wmSvg = showWM
     ? `<text x="${STAGE / 2}" y="${STAGE + WMH * 0.62}" text-anchor="middle" font-family="${state.font.css}" font-weight="${state.font.weight}" font-size="150" letter-spacing="6" fill="${c.ink}">${state.wordmark}</text>`
     : "";
 
@@ -177,7 +178,7 @@ function exportComposition(kind) {
   finishPNG(o, c, wmH, out);
 }
 function finishPNG(o, c, wmH, out) {
-  if (state.showWordmark) {
+  if (wmH) {
     o.fillStyle = c.ink; o.textAlign = "center";
     o.font = `${state.font.weight} 150px ${state.font.css}`;
     o.fillText(state.wordmark, STAGE / 2, STAGE + WMH * 0.62);
@@ -200,6 +201,7 @@ function renderControls() {
 
   const sliders = e.params.map((pr) => {
     const v = p[pr.key];
+    if (pr.type === "hidden") return "";
     if (pr.type === "color") return `<label class="swrow gi"><span>${pr.label}</span><input type="color" data-param="${pr.key}" value="${v}"><code>${v}</code></label>`;
     if (pr.type === "text") return `<label class="textparam"><span>${pr.label}</span><input type="text" data-param="${pr.key}" value="${String(v).replace(/"/g, "&quot;")}" maxlength="8" class="text"></label>`;
     const isToggle = pr.min === 0 && pr.max === 1 && pr.step === 1;
@@ -233,6 +235,7 @@ function renderControls() {
 
     <section>
       <h3>Parameters</h3>
+      ${e.controls ? e.controls(p) : ""}
       ${sliders}
       <div class="row"><button class="ghost" id="regen">⟳ New seed</button>${interactiveTools}</div>
     </section>
@@ -272,6 +275,9 @@ function renderControls() {
 function wire() {
   const e = engine();
   document.querySelectorAll("[data-engine]").forEach((b) => b.onclick = () => { state.engineId = b.dataset.engine; renderAll(); });
+
+  // engine-specific custom controls (e.g. Letter weave's string + per-letter chips)
+  if (e.wireControls) e.wireControls(document.getElementById("controls"), state.params[e.id], { redraw: () => updateMark() });
 
   document.querySelectorAll("[data-param]").forEach((inp) => inp.oninput = () => {
     const val = inp.type === "checkbox" ? (inp.checked ? 1 : 0) : (inp.type === "color" || inp.type === "text") ? inp.value : Number(inp.value);
