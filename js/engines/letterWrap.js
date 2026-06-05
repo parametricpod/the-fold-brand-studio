@@ -18,11 +18,11 @@ export default {
   params: [
     { key: "glyphs", type: "hidden", default: "THE FOLD" },
     { key: "picks",  type: "hidden", default: [4] },
-    { key: "wrap",   label: "Weave spread",    min: 0,    max: 0.6,  step: 0.005, default: 0.18 },
-    { key: "depth",  label: "Weave depth",     min: 0.05, max: 1,    step: 0.01,  default: 0.5 },
-    { key: "passes", label: "Crossings",       min: 1,    max: 10,   step: 1,     default: 3 },
+    { key: "wrap",   label: "Wrap spread",     min: 0.02, max: 0.7,  step: 0.005, default: 0.26 },
+    { key: "depth",  label: "Wrap depth",      min: 0.1,  max: 1.2,  step: 0.01,  default: 0.55 },
+    { key: "passes", label: "Wraps",           min: 1,    max: 10,   step: 1,     default: 3 },
     { key: "width",  label: "Ribbon width",    min: 0.01, max: 0.2,  step: 0.005, default: 0.075 },
-    { key: "twist",  label: "Twist",           min: 0,    max: 3,    step: 0.01,  default: 0.3 },
+    { key: "twist",  label: "Twist",           min: 0,    max: 3,    step: 0.01,  default: 0.2 },
     { key: "shift",  label: "Shift start",     min: 0,    max: 1,    step: 0.005, default: 0 },
     { key: "cover",  label: "Length",          min: 0.3,  max: 1,    step: 0.01,  default: 1 },
   ],
@@ -75,7 +75,7 @@ export default {
 
     const letterMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.85, metalness: 0 });
     let letterGroup = null, ribbonGroup = null, guides = new Map(), worldBox = null, contourKey = "", token = 0;
-    const LT = 0.12; // tiny letter extrusion so ribbons occlude cleanly (still reads 2D head-on)
+    const LT = 0.28; // real letter thickness in z so it occludes the ribbon's behind passes (reads 2D head-on)
 
     // ---- geometry helpers ---------------------------------------------------
     function trace(grid, W, H) {
@@ -245,18 +245,22 @@ export default {
       const startM = mainLo + fullM * (1 - P.cover) * P.shift, sweep = fullM * P.cover;
       const amp = Math.max(crossLen * (0.4 + 0.95 * P.wrap), 0.1);
 
-      const N = 260, pX = [], pY = [], occ = [];
+      // Helix along the sweep: the cross swing and the z move are 90° out of phase, so at
+      // every stroke-crossing the ribbon is fully in FRONT (+z) or fully BEHIND (−z), alternating.
+      // The solid (extruded) letter then occludes the behind passes — a real over/under wrap.
+      // An end-envelope tapers the radius so it threads in flat, wraps, and threads out flat.
+      const N = 300, ctrl = [];
       for (let i = 0; i <= N; i++) {
         const t = i / N;
-        const mp = startM + sweep * t, co = amp * Math.sin(P.passes * TAU * t + phase);
+        const mp = startM + sweep * t;
+        const env = Math.pow(Math.sin(Math.PI * t), 0.55);          // 0 at ends, 1 in the middle
+        const th = P.passes * TAU * t + phase;
+        const co = amp * env * Math.sin(th);                        // cross-axis swing
+        const z = P.depth * env * Math.cos(th);                     // front (+) ↔ behind (−)
         const x = vertical ? crossC + co : mp;
-        const y = vertical ? mainHi - (mp - mainLo) : crossC + co;   // tall letters sweep top→bottom
-        pX.push(x); pY.push(y); occ.push(L.sample(x, y) ? 1 : 0);
+        const y = vertical ? mainHi - (mp - mainLo) : crossC + co;  // tall letters sweep top→bottom
+        ctrl.push(new THREE.Vector3(x, y, z));
       }
-      // smooth occupancy so the dive behind / rise in front is an eased fold, not a step
-      const win = 7, occS = occ.map((_, i) => { let s = 0, c = 0; for (let j = -win; j <= win; j++) { const k = i + j; if (k >= 0 && k <= N) { s += occ[k]; c++; } } return s / c; });
-      const ctrl = [];
-      for (let i = 0; i <= N; i++) ctrl.push(new THREE.Vector3(pX[i], pY[i], P.depth * (1 - 2 * occS[i])));
       const curve = new THREE.CatmullRomCurve3(ctrl, false, "catmullrom", 0.5);
 
       const M = 420, pos = [], tan = [];
