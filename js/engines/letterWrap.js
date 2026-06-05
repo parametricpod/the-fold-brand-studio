@@ -1,30 +1,43 @@
 // letterWrap.js — the string IS the artwork. The text you type is set large and flat
-// (2D, no rotation) in the chosen wordmark typeface. Tick the letter instances you
-// want and a folded ribbon weaves in and out of and around each one — diving behind
-// the flat glyph and popping in front. Per-letter chips are generated from the string.
+// (2D, no rotation) in the chosen wordmark typeface. Tick the letter instances you want
+// and a folded ribbon wraps around each one — passing in FRONT of the stroke and BEHIND
+// it (the glyph is a real solid in the depth buffer, so it occludes the back passes).
+// The wrap path is a seeded, slightly chaotic helix that clears the letter (no collision),
+// and the ribbon can be a finite segment that travels along the path. Scroll to zoom.
 import * as THREE from "three";
 import { rng } from "../util.js";
 
 const TAU = Math.PI * 2;
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const attr = (s) => String(s).replace(/"/g, "&quot;");
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const pingpong = (x) => { let m = x % 2; if (m < 0) m += 2; return m > 1 ? 2 - m : m; };
+function makeNoise(rnd) {                                   // smooth seeded 1-D noise, range ~[-1,1]
+  const c = []; let amp = 1, tot = 0;
+  for (let j = 0; j < 3; j++) { c.push([1 + j + Math.floor(rnd() * 3), rnd() * TAU, amp]); tot += amp; amp *= 0.6; }
+  return (t) => { let s = 0; for (const [f, p, a] of c) s += a * Math.sin(f * TAU * t + p); return s / tot; };
+}
 
 export default {
   id: "letter",
   label: "Letter weave",
   kind: "live",
   hideWordmark: true,
-  blurb: "Your string, set large and flat. Tick the letters below to weave a folded ribbon in and out of each one.",
+  blurb: "Your string, set large and flat. Tick letters below to wrap a folded ribbon around each. Scroll to zoom · drag to pan.",
   params: [
-    { key: "glyphs", type: "hidden", default: "THE FOLD" },
-    { key: "picks",  type: "hidden", default: [4] },
-    { key: "wrap",   label: "Wrap spread",     min: 0.02, max: 0.7,  step: 0.005, default: 0.26 },
-    { key: "depth",  label: "Wrap depth",      min: 0.1,  max: 1.2,  step: 0.01,  default: 0.55 },
-    { key: "passes", label: "Wraps",           min: 1,    max: 10,   step: 1,     default: 3 },
-    { key: "width",  label: "Ribbon width",    min: 0.01, max: 0.2,  step: 0.005, default: 0.075 },
-    { key: "twist",  label: "Twist",           min: 0,    max: 3,    step: 0.01,  default: 0.2 },
-    { key: "shift",  label: "Shift start",     min: 0,    max: 1,    step: 0.005, default: 0 },
-    { key: "cover",  label: "Length",          min: 0.3,  max: 1,    step: 0.01,  default: 1 },
+    { key: "glyphs",  type: "hidden", default: "THE FOLD" },
+    { key: "picks",   type: "hidden", default: [4] },
+    { key: "wrap",    label: "Wrap spread",   min: 0.02, max: 0.8,  step: 0.005, default: 0.28 },
+    { key: "depth",   label: "Wrap depth",    min: 0.15, max: 1.3,  step: 0.01,  default: 0.6 },
+    { key: "passes",  label: "Wraps",         min: 1,    max: 10,   step: 1,     default: 3 },
+    { key: "chaos",   label: "Randomness",    min: 0,    max: 1,    step: 0.01,  default: 0.4 },
+    { key: "width",   label: "Ribbon width",  min: 0.01, max: 0.2,  step: 0.005, default: 0.075 },
+    { key: "twist",   label: "Twist",         min: 0,    max: 3,    step: 0.01,  default: 0.2 },
+    { key: "cover",   label: "Path length",   min: 0.3,  max: 1,    step: 0.01,  default: 1 },
+    { key: "segment", label: "Ribbon length", min: 0.08, max: 1,   step: 0.01,  default: 1 },
+    { key: "travel",  label: "Position",      min: 0,    max: 1,    step: 0.005, default: 0 },
+    { key: "flow",    label: "Auto-travel",   min: 0,    max: 1,    step: 0.01,  default: 0 },
   ],
 
   // ---- custom controls: string input + per-letter chips ---------------------
@@ -33,7 +46,7 @@ export default {
       `<button type="button" class="lw-chip ${p.picks.includes(i) ? "on" : ""}" data-pick="${i}">${esc(ch)}</button>`).join("");
     return `<label class="textparam"><span>String</span>
         <input type="text" id="lw-str" class="text" value="${attr(p.glyphs)}" maxlength="18" placeholder="Type your wordmark…"></label>
-      <div class="lw-pick"><span class="lw-lbl">Weave which letters</span>
+      <div class="lw-pick"><span class="lw-lbl">Wrap which letters</span>
         <div class="lw-chips" id="lw-chips">${chips}</div></div>`;
   },
   wireControls(root, p, api) {
@@ -60,24 +73,27 @@ export default {
     let P = { ...ctx.params }, colors = ctx.colors, ink = ctx.ink, ground = ctx.ground, seed = ctx.seed, font = ctx.font;
 
     const canvas = document.createElement("canvas");
-    canvas.style.width = "100%"; canvas.style.height = "100%"; canvas.style.display = "block";
+    canvas.style.width = "100%"; canvas.style.height = "100%"; canvas.style.display = "block"; canvas.style.touchAction = "none";
     host.appendChild(canvas);
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     const scene = new THREE.Scene();
-    const camera = new THREE.OrthographicCamera(-1.8, 1.8, 1.8, -1.8, -20, 20);
-    camera.position.set(0, 0, 6);
+    const camera = new THREE.OrthographicCamera(-1.8, 1.8, 1.8, -1.8, -50, 50);
+    camera.position.set(0, 0, 12);
 
-    const key = new THREE.DirectionalLight(0xffffff, 1.7); key.position.set(-1.4, 2, 3); scene.add(key);
-    const rim = new THREE.DirectionalLight(0xffffff, 0.7); rim.position.set(2, -1, 2); scene.add(rim);
+    const keyL = new THREE.DirectionalLight(0xffffff, 1.7); keyL.position.set(-1.4, 2, 3); scene.add(keyL);
+    const rimL = new THREE.DirectionalLight(0xffffff, 0.7); rimL.position.set(2, -1, 2); scene.add(rimL);
     scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 
     const letterMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.85, metalness: 0 });
-    let letterGroup = null, ribbonGroup = null, guides = new Map(), worldBox = null, contourKey = "", token = 0;
-    const LT = 0.28; // real letter thickness in z so it occludes the ribbon's behind passes (reads 2D head-on)
+    let letterGroup = null, ribbonGroup = null, specs = [], guides = new Map(), worldBox = null, contourKey = "", token = 0;
+    let zoom = 1, panX = 0, panY = 0, dirty = true, seedAtBuild = seed;
+    const picksChanged = (a, b) => { a = a || []; b = b || []; return a.length !== b.length || a.some((v, i) => v !== b[i]); };
+    const PATH_KEYS = ["wrap", "depth", "passes", "chaos", "width", "twist", "cover"];
+    const LT = 0.3; // real letter thickness in z — a solid occluder (still reads 2D head-on)
 
-    // ---- geometry helpers ---------------------------------------------------
+    // ---- contour helpers (marching squares) ---------------------------------
     function trace(grid, W, H) {
       const val = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? 0 : grid[y * W + x]);
       const segs = [], push = (a, b) => segs.push({ a, b });
@@ -114,8 +130,9 @@ export default {
       return c;
     }
     function resampleClosed(pts, n) {
-      const seg = [], P0 = pts.slice(); if (P0[0] !== P0[P0.length - 1]) P0.push(P0[0]);
-      let total = 0; for (let i = 0; i < P0.length - 1; i++) { const d = Math.hypot(P0[i + 1].x - P0[i].x, P0[i + 1].y - P0[i].y); seg.push(d); total += d; }
+      const P0 = pts.slice(); if (P0[0] !== P0[P0.length - 1]) P0.push(P0[0]);
+      const seg = []; let total = 0;
+      for (let i = 0; i < P0.length - 1; i++) { const d = Math.hypot(P0[i + 1].x - P0[i].x, P0[i + 1].y - P0[i].y); seg.push(d); total += d; }
       const out = [];
       for (let i = 0; i < n; i++) {
         let t = (i / n) * total, j = 0;
@@ -137,8 +154,6 @@ export default {
       }
       return pts;
     }
-
-    // rasterize one character, return contours (local px) + grid for ink tests
     function rasterChar(ch, fam, wgt, ital, FS, pad) {
       const m = document.createElement("canvas").getContext("2d");
       m.font = `${ital}${wgt} ${FS}px ${fam}, serif`;
@@ -164,7 +179,7 @@ export default {
         const ch = glyphs[i];
         const rc = rasterChar(ch, fam, wgt, ital, FS, pad);
         if (!rc.empty && ch.trim() !== "") {
-          const dx = penX - pad;                       // local px -> global px
+          const dx = penX - pad;
           let loops = trace(rc.grid, rc.W, rc.H).map((l) => ({ pts: l, a: area(l) })).filter((l) => l.a > 6).sort((p, q) => q.a - p.a);
           if (loops.length) {
             loops.forEach((l) => { l.depth = loops.reduce((n, o) => (o !== l && o.a > l.a && inPoly(o.pts, l.pts[0]) ? n + 1 : n), 0); });
@@ -173,14 +188,13 @@ export default {
               outer: o.pts.map(g2),
               holes: loops.filter((h) => h.depth === o.depth + 1 && inPoly(o.pts, h.pts[0])).map((h) => h.pts.map(g2)),
             }));
-            chars.push({ index: i, ch, outers, dom: outers[0].outer, grid: rc.grid, W: rc.W, H: rc.H, dx });
+            chars.push({ index: i, ch, outers, grid: rc.grid, W: rc.W, H: rc.H, dx });
           }
         }
         penX += rc.adv;
       }
       if (!chars.length) return null;
 
-      // global bbox -> centered world transform (fit width)
       let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
       for (const c of chars) for (const o of c.outers) for (const p of o.outer) {
         if (p.x < minx) minx = p.x; if (p.x > maxx) maxx = p.x; if (p.y < miny) miny = p.y; if (p.y > maxy) maxy = p.y;
@@ -188,7 +202,6 @@ export default {
       const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2, K = 3.0 / Math.max(1, maxx - minx);
       const toW = (p) => ({ x: (p.x - cx) * K, y: -(p.y - cy) * K });
 
-      // letter shapes (smoothed) + per-letter ribbon guide (world + outward normals)
       const shapes = [], gmap = new Map();
       for (const c of chars) {
         for (const o of c.outers) {
@@ -200,7 +213,7 @@ export default {
           }
           shapes.push(shape);
         }
-        // per-letter ink sampler (world px -> this char's grid) + world bbox, for lacing
+        // per-letter ink sampler (world -> this char's grid) + world bbox + scale (world units / glyph px)
         const dx = c.dx, gr = c.grid, GW = c.W, GH = c.H;
         const sample = (wx, wy) => {
           const lx = Math.round(wx / K + cx - dx), ly = Math.round(cy - wy / K);
@@ -216,7 +229,7 @@ export default {
 
     // ---- meshes -------------------------------------------------------------
     function disposeLetters() { if (letterGroup) { letterGroup.children.forEach((m) => m.geometry.dispose()); scene.remove(letterGroup); letterGroup = null; } }
-    function disposeRibbons() { if (ribbonGroup) { ribbonGroup.children.forEach((m) => { m.geometry.dispose(); m.material.dispose(); }); scene.remove(ribbonGroup); ribbonGroup = null; } }
+    function disposeRibbons() { if (ribbonGroup) { ribbonGroup.children.forEach((m) => { m.geometry.dispose(); m.material.dispose(); }); scene.remove(ribbonGroup); } specs = []; ribbonGroup = null; }
 
     function buildLetters(shapes) {
       disposeLetters();
@@ -229,42 +242,51 @@ export default {
       scene.add(letterGroup);
     }
 
-    // Over-under lacing: sweep a ribbon along the glyph's long axis, oscillating across
-    // the short axis. Depth is driven by ink — behind the strokes, in front of the gaps —
-    // so it threads through. The sweep is monotonic on one axis, so it can never knot.
-    function ribbonFor(L, kColor) {
-      const r = rng(seed * 131 + 7 + kColor * 17);
-      const phase = r() * TAU;
+    // Build the full wrap PATH for one letter: a seeded, slightly chaotic helix along the
+    // glyph's long axis. The cross swing and z are 90° out of phase, so each crossing is
+    // fully front or behind (alternating). Where the path is over ink, z is pushed to clear
+    // the letter's depth band (LT/2 + ribbon half-width) — so the ribbon never collides.
+    function generatePath(L, kColor) {
+      const r = rng(seed * 131 + 7 + kColor * 53);
+      const phase = r() * TAU, nAng = makeNoise(r), nAmp = makeNoise(r), nDep = makeNoise(r), nMain = makeNoise(r);
       const Wd = L.maxx - L.minx, Hd = L.maxy - L.miny;
-      const vertical = Hd > Wd * 1.1;                 // run down tall letters, across wide ones
+      const vertical = Hd > Wd * 1.1;
       const mainLen = vertical ? Hd : Wd, crossLen = vertical ? Wd : Hd;
       const crossC = vertical ? (L.minx + L.maxx) / 2 : (L.miny + L.maxy) / 2;
-      const pad = mainLen * 0.3;
+      const pad = mainLen * 0.28;
       const mainLo = (vertical ? L.miny : L.minx) - pad, mainHi = (vertical ? L.maxy : L.maxx) + pad;
       const fullM = mainHi - mainLo;
-      const startM = mainLo + fullM * (1 - P.cover) * P.shift, sweep = fullM * P.cover;
-      const amp = Math.max(crossLen * (0.4 + 0.95 * P.wrap), 0.1);
+      const startM = mainLo + fullM * (1 - P.cover) * 0.5, sweep = fullM * P.cover;
+      const amp = Math.max(crossLen * (0.4 + 0.95 * P.wrap), 0.12);
+      const band = LT / 2 + P.width * 0.5 + 0.05;        // depth the ribbon must clear over ink
 
-      // Helix along the sweep: the cross swing and the z move are 90° out of phase, so at
-      // every stroke-crossing the ribbon is fully in FRONT (+z) or fully BEHIND (−z), alternating.
-      // The solid (extruded) letter then occludes the behind passes — a real over/under wrap.
-      // An end-envelope tapers the radius so it threads in flat, wraps, and threads out flat.
-      const N = 300, ctrl = [];
+      const N = 320, raw = [];
       for (let i = 0; i <= N; i++) {
         const t = i / N;
-        const mp = startM + sweep * t;
-        const env = Math.pow(Math.sin(Math.PI * t), 0.55);          // 0 at ends, 1 in the middle
-        const th = P.passes * TAU * t + phase;
-        const co = amp * env * Math.sin(th);                        // cross-axis swing
-        const z = P.depth * env * Math.cos(th);                     // front (+) ↔ behind (−)
+        const env = Math.pow(Math.sin(Math.PI * t), 0.55);                 // taper ends: thread in / out
+        const th = P.passes * TAU * t + phase + P.chaos * 2.4 * nAng(t);   // chaotic angle
+        const co = amp * env * (1 + P.chaos * 0.7 * nAmp(t)) * Math.sin(th);
+        const zr = P.depth * env * (1 + P.chaos * 0.55 * nDep(t)) * Math.cos(th);
+        const mp = startM + sweep * t + P.chaos * 0.08 * mainLen * nMain(t);
         const x = vertical ? crossC + co : mp;
-        const y = vertical ? mainHi - (mp - mainLo) : crossC + co;  // tall letters sweep top→bottom
-        ctrl.push(new THREE.Vector3(x, y, z));
+        const y = vertical ? mainHi - (mp - mainLo) : crossC + co;
+        const side = Math.cos(th) >= 0 ? 1 : -1;
+        raw.push({ x, y, zr, side, ink: L.sample(x, y) ? 1 : 0 });
       }
-      const curve = new THREE.CatmullRomCurve3(ctrl, false, "catmullrom", 0.5);
+      // smooth the ink field, then push z clear of the glyph where it's over a stroke
+      const win = 6, pts = [];
+      for (let i = 0; i <= N; i++) {
+        let s = 0, c = 0; for (let j = -win; j <= win; j++) { const k = i + j; if (k >= 0 && k <= N) { s += raw[k].ink; c++; } }
+        const w = smoothstep(0.12, 0.55, s / c);
+        const R = raw[i], zc = R.side * Math.max(Math.abs(R.zr), band);
+        pts.push(new THREE.Vector3(R.x, R.y, R.zr * (1 - w) + zc * w));
+      }
+      return new THREE.CatmullRomCurve3(pts, false, "catmullrom", 0.5);
+    }
 
-      const M = 420, pos = [], tan = [];
-      for (let i = 0; i <= M; i++) { const t = i / M; pos.push(curve.getPoint(t)); tan.push(curve.getTangent(t).normalize()); }
+    function buildStrip(curve, a, b) {
+      const M = 240, pos = [], tan = [];
+      for (let i = 0; i <= M; i++) { const u = a + (b - a) * (i / M); pos.push(curve.getPoint(u)); tan.push(curve.getTangent(u).normalize()); }
       const up = Math.abs(tan[0].z) > 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
       let normal = up.clone().sub(tan[0].clone().multiplyScalar(up.dot(tan[0]))).normalize();
       const normals = [normal.clone()];
@@ -287,30 +309,44 @@ export default {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
       geo.setIndex(idx); geo.computeVertexNormals();
-      const mat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.55, metalness: 0.05, color: new THREE.Color(colors[kColor % colors.length] || ink) });
-      return new THREE.Mesh(geo, mat);
+      return geo;
     }
 
     function buildRibbons() {
       disposeRibbons();
       ribbonGroup = new THREE.Group();
       const picks = (P.picks || []).filter((i) => guides.has(i));
-      picks.forEach((i, k) => { const g = guides.get(i); if (g && g.sample) ribbonGroup.add(ribbonFor(g, k)); });
+      picks.forEach((i, k) => {
+        const L = guides.get(i); if (!L || !L.sample) return;
+        const curve = generatePath(L, k);
+        const mat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.55, metalness: 0.05, color: new THREE.Color(colors[k % colors.length] || ink) });
+        const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+        ribbonGroup.add(mesh); specs.push({ curve, mesh });
+      });
       scene.add(ribbonGroup);
+      layoutRibbons(0);
+    }
+    function windowAB(clock) {
+      const seg = clamp(P.segment, 0.05, 1);
+      let p = P.flow > 0 ? pingpong(P.travel + clock * P.flow * 0.22) : clamp(P.travel, 0, 1);
+      const a = p * (1 - seg);
+      return [a, a + seg];
+    }
+    function layoutRibbons(clock) {
+      const [a, b] = windowAB(clock);
+      for (const s of specs) { s.mesh.geometry.dispose(); s.mesh.geometry = buildStrip(s.curve, a, b); }
     }
 
-    function fitCamera() {
+    function applyCam() {
       if (!worldBox) return;
       const w = worldBox.maxx - worldBox.minx, h = worldBox.maxy - worldBox.miny;
       const half = Math.max(w, h) / 2 * 1.14 + P.depth * 0.4;
       camera.left = -half; camera.right = half; camera.top = half; camera.bottom = -half;
+      camera.zoom = zoom; camera.position.x = panX; camera.position.y = panY;
       camera.updateProjectionMatrix();
+      dirty = true;
     }
-    function applyColors() {
-      letterMat.color = new THREE.Color(ink);
-      renderer.setClearColor(new THREE.Color(ground), 1);
-    }
-    function renderNow() { renderer.render(scene, camera); }
+    function applyColors() { letterMat.color = new THREE.Color(ink); renderer.setClearColor(new THREE.Color(ground), 1); dirty = true; }
 
     function rebuildAll() {
       const fam = (font && font.css) || "";
@@ -320,9 +356,9 @@ export default {
       ready.then(() => {
         if (my !== token) return;
         const r = buildContours();
-        if (!r) { disposeLetters(); disposeRibbons(); guides = new Map(); renderNow(); return; }
+        if (!r) { disposeLetters(); disposeRibbons(); guides = new Map(); dirty = true; return; }
         guides = r.guides; worldBox = r.worldBox;
-        buildLetters(r.shapes); buildRibbons(); fitCamera(); contourKey = want; renderNow();
+        buildLetters(r.shapes); buildRibbons(); applyCam(); contourKey = want; dirty = true;
       });
     }
 
@@ -330,26 +366,59 @@ export default {
 
     function resize() {
       const rb = host.getBoundingClientRect(), s = Math.max(1, Math.min(rb.width, rb.height || rb.width));
-      renderer.setSize(s, s, false); canvas.style.width = "100%"; canvas.style.height = "100%";
-      renderNow();
+      renderer.setSize(s, s, false); canvas.style.width = "100%"; canvas.style.height = "100%"; dirty = true;
     }
     resize();
     const ro = new ResizeObserver(resize); ro.observe(host);
+
+    // ---- zoom (wheel) + pan (drag), no rotation -----------------------------
+    const onWheel = (e) => { e.preventDefault(); zoom = clamp(zoom * (1 - e.deltaY * 0.0015), 0.4, 8); applyCam(); };
+    let dragging = false, lx = 0, ly = 0;
+    const onDown = (e) => { dragging = true; lx = e.clientX; ly = e.clientY; canvas.setPointerCapture?.(e.pointerId); };
+    const onMove = (e) => {
+      if (!dragging) return;
+      const px = canvas.clientWidth || 1, wpp = (camera.right - camera.left) / camera.zoom / px;
+      panX -= (e.clientX - lx) * wpp; panY += (e.clientY - ly) * wpp; lx = e.clientX; ly = e.clientY; applyCam();
+    };
+    const onUp = () => { dragging = false; };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("pointerdown", onDown);
+    canvas.addEventListener("pointermove", onMove);
+    canvas.addEventListener("pointerup", onUp);
+    canvas.addEventListener("pointerleave", onUp);
+
+    // ---- render loop: animate only when auto-travel is on; else render on demand
+    let raf = 0, running = true, animStart = performance.now();
+    function loop(now) {
+      if (!running) return;
+      const animating = P.flow > 0 && P.segment < 0.999 && specs.length;
+      if (animating) { layoutRibbons((now - animStart) / 1000); dirty = true; }
+      if (dirty) { renderer.render(scene, camera); dirty = false; }
+      raf = requestAnimationFrame(loop);
+    }
+    raf = requestAnimationFrame(loop);
 
     return {
       update(nc) {
         const fam = (nc.font && nc.font.css) || "";
         const want = [nc.params.glyphs, fam, nc.font && nc.font.weight, nc.font && nc.font.italic].join("|");
+        const prev = P, prevSeed = seed;
         P = { ...nc.params }; colors = nc.colors; ink = nc.ink; ground = nc.ground; seed = nc.seed; font = nc.font;
         applyColors();
-        if (want !== contourKey) { rebuildAll(); }       // string / typeface changed → retrace
-        else { buildRibbons(); fitCamera(); renderNow(); } // weave params or picks → fast resweep
+        if (want !== contourKey) { rebuildAll(); return; }                 // string / typeface → full retrace
+        const pathChanged = PATH_KEYS.some((k) => prev[k] !== P[k]) || seed !== prevSeed || picksChanged(prev.picks, P.picks);
+        if (pathChanged) { seedAtBuild = seed; buildRibbons(); applyCam(); } // regenerate wrap paths
+        else { layoutRibbons((performance.now() - animStart) / 1000); }      // only travel / segment / flow → reposition
+        dirty = true;
       },
       destroy() {
-        ro.disconnect(); disposeLetters(); disposeRibbons();
-        letterMat.dispose(); renderer.dispose(); canvas.remove();
+        running = false; cancelAnimationFrame(raf); ro.disconnect();
+        canvas.removeEventListener("wheel", onWheel); canvas.removeEventListener("pointerdown", onDown);
+        canvas.removeEventListener("pointermove", onMove); canvas.removeEventListener("pointerup", onUp);
+        canvas.removeEventListener("pointerleave", onUp);
+        disposeLetters(); disposeRibbons(); letterMat.dispose(); renderer.dispose(); canvas.remove();
       },
-      snapshotCanvas() { renderNow(); return canvas; },
+      snapshotCanvas() { renderer.render(scene, camera); return canvas; },
     };
   },
 };
