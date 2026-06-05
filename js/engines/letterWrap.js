@@ -288,7 +288,7 @@ export default {
         const R = raw[i], zc = R.side * Math.max(Math.abs(R.zr), band);
         pts.push(new THREE.Vector3(R.x, R.y, R.zr * (1 - w) + zc * w));
       }
-      return new THREE.CatmullRomCurve3(pts, false, "catmullrom", 0.5);
+      return new THREE.CatmullRomCurve3(pts, false, "centripetal");
     }
 
     // Band mode: ONE ribbon sweeping horizontally across the selected letters, weaving in
@@ -297,37 +297,43 @@ export default {
     // the word without colliding. y gently serpentines so it crosses strokes at varied heights.
     function generateBandPath(idxs) {
       const r = rng(seed * 131 + 911);
-      const phase = r() * TAU, nY = makeNoise(r), nZ = makeNoise(r), nA = makeNoise(r);
+      const phase = r() * TAU, nY = makeNoise(r), nZ = makeNoise(r);
       let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
       for (const i of idxs) { const b = guides.get(i); minx = Math.min(minx, b.minx); maxx = Math.max(maxx, b.maxx); miny = Math.min(miny, b.miny); maxy = Math.max(maxy, b.maxy); }
-      const spanW = maxx - minx, bandH = Math.max(0.1, maxy - miny);
-      const pad = bandH * 0.4;
-      const xLo = minx - pad, xHi = maxx + pad, fullX = xHi - xLo;
-      const startX = xLo + fullX * (1 - P.cover) * 0.5, sweepX = fullX * P.cover;
-      const yc = (miny + maxy) / 2;
-      const yAmp = clamp(bandH * (0.16 + 0.5 * P.wrap), 0.05, bandH * 0.72);
-      const band = LT / 2 + P.width * 0.5 + 0.05;
-      const zCycles = clamp(Math.round((spanW / bandH) * (0.55 + P.passes / 4)), 2, 48);
-      const yLobes = Math.max(1, Math.round(zCycles * 0.45));
-      const N = clamp(Math.round((spanW / bandH) * 100), 360, 1400);
+      const spanW = maxx - minx, bandH = Math.max(0.1, maxy - miny), nLetters = idxs.length;
+      const pad = bandH * 0.4, xLo = minx - pad, xHi = maxx + pad, fullX = xHi - xLo;
+      const startX = xLo + fullX * (1 - P.cover) * 0.5, sweepX = fullX * P.cover, yc = (miny + maxy) / 2;
+      const yAmp = clamp(bandH * (0.14 + 0.45 * P.wrap), 0.04, bandH * 0.66);
+      const yLobes = Math.max(1, Math.round(nLetters * 0.5));
+      const band = LT / 2 + P.width * 0.85 + 0.07;           // depth clearance the ribbon must keep over ink
+      const N = clamp(Math.round((spanW / bandH) * 80), 300, 760);
 
-      const raw = [];
+      const X = [], Y = [], INK = [];
       for (let i = 0; i <= N; i++) {
-        const t = i / N;
-        const env = smoothstep(0, 0.06, t) * smoothstep(0, 0.06, 1 - t);   // uniform across span, quick ease at ends
+        const t = i / N, env = smoothstep(0, 0.06, t) * smoothstep(0, 0.06, 1 - t);
         const x = startX + sweepX * t;
-        const y = yc + yAmp * env * (Math.sin(yLobes * TAU * t + phase) + P.chaos * 0.5 * nY(t));
-        const zth = zCycles * TAU * t + phase * 1.7 + P.chaos * 2.0 * nA(t);
-        const zr = P.depth * env * (1 + P.chaos * 0.5 * nZ(t)) * Math.cos(zth);
-        raw.push({ x, y, zr, side: Math.cos(zth) >= 0 ? 1 : -1, ink: gSample(x, y) ? 1 : 0 });
+        const y = yc + yAmp * env * (Math.sin(yLobes * TAU * t + phase) + P.chaos * 0.4 * nY(t));
+        X.push(x); Y.push(y); INK.push(gSample(x, y) ? 1 : 0);
       }
-      const win = 6, pts = [];
+      const win = Math.max(3, Math.round(N * 0.02));         // smooth the ink field (widens stroke influence)
+      const inkS = INK.map((_, i) => { let s = 0, c = 0; for (let j = -win; j <= win; j++) { const k = i + j; if (k >= 0 && k <= N) { s += INK[k]; c++; } } return s / c; });
+
+      // The weave's front↔back phase advances ONLY in the gaps between letters, so a side flip
+      // never lands on a stroke (that was the kink/collision). Over a letter the side is held and
+      // z is clamped past the clearance band; centripetal Catmull-Rom avoids overshoot loops.
+      const totalGap = inkS.reduce((a, v) => a + (1 - v), 0) || 1;
+      const flips = clamp(Math.round(nLetters * (0.5 + P.passes / 5)), 1, 40);
+      const step = flips * Math.PI / totalGap;
+      let ph = phase * 1.3; const pts = [];
       for (let i = 0; i <= N; i++) {
-        let s = 0, c = 0; for (let j = -win; j <= win; j++) { const k = i + j; if (k >= 0 && k <= N) { s += raw[k].ink; c++; } }
-        const w = smoothstep(0.12, 0.55, s / c), R = raw[i], zc = R.side * Math.max(Math.abs(R.zr), band);
-        pts.push(new THREE.Vector3(R.x, R.y, R.zr * (1 - w) + zc * w));
+        ph += (1 - inkS[i]) * step;
+        const side = Math.cos(ph), t = i / N, env = smoothstep(0, 0.06, t) * smoothstep(0, 0.06, 1 - t);
+        const rawZ = P.depth * env * side * (1 + P.chaos * 0.35 * nZ(t));
+        const w = smoothstep(0.12, 0.6, inkS[i]);
+        const clamped = (side >= 0 ? 1 : -1) * Math.max(Math.abs(rawZ), band);
+        pts.push(new THREE.Vector3(X[i], Y[i], rawZ * (1 - w) + clamped * w));
       }
-      return new THREE.CatmullRomCurve3(pts, false, "catmullrom", 0.5);
+      return new THREE.CatmullRomCurve3(pts, false, "centripetal");
     }
 
     function buildStrip(curve, a, b) {
@@ -376,8 +382,9 @@ export default {
       layoutRibbons(0);
     }
     function windowAB(clock) {
-      const seg = clamp(P.segment, 0.05, 1);
-      let p = P.flow > 0 ? pingpong(P.travel + clock * P.flow * 0.22) : clamp(P.travel, 0, 1);
+      let seg = clamp(P.segment, 0.05, 1);
+      if (P.flow > 0) seg = Math.min(seg, 0.85);            // ensure room to travel even at full length
+      const p = P.flow > 0 ? pingpong(P.travel + clock * P.flow * 0.22) : clamp(P.travel, 0, 1);
       const a = p * (1 - seg);
       return [a, a + seg];
     }
@@ -440,7 +447,7 @@ export default {
     let raf = 0, running = true, animStart = performance.now();
     function loop(now) {
       if (!running) return;
-      const animating = P.flow > 0 && P.segment < 0.999 && specs.length;
+      const animating = P.flow > 0 && specs.length;
       if (animating) { layoutRibbons((now - animStart) / 1000); dirty = true; }
       if (dirty) { renderer.render(scene, camera); dirty = false; }
       raf = requestAnimationFrame(loop);
