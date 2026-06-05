@@ -18,13 +18,13 @@ export default {
   params: [
     { key: "glyphs", type: "hidden", default: "THE FOLD" },
     { key: "picks",  type: "hidden", default: [4] },
-    { key: "wrap",   label: "Wrap (in / out)", min: 0,    max: 0.5,  step: 0.005, default: 0.1 },
-    { key: "depth",  label: "Weave depth",     min: 0,    max: 1,    step: 0.01,  default: 0.46 },
-    { key: "passes", label: "Passes",          min: 1,    max: 16,   step: 1,     default: 4 },
-    { key: "width",  label: "Ribbon width",    min: 0.01, max: 0.2,  step: 0.005, default: 0.07 },
-    { key: "twist",  label: "Twist",           min: 0,    max: 3,    step: 0.01,  default: 0.5 },
+    { key: "wrap",   label: "Weave spread",    min: 0,    max: 0.6,  step: 0.005, default: 0.18 },
+    { key: "depth",  label: "Weave depth",     min: 0.05, max: 1,    step: 0.01,  default: 0.5 },
+    { key: "passes", label: "Crossings",       min: 1,    max: 10,   step: 1,     default: 3 },
+    { key: "width",  label: "Ribbon width",    min: 0.01, max: 0.2,  step: 0.005, default: 0.075 },
+    { key: "twist",  label: "Twist",           min: 0,    max: 3,    step: 0.01,  default: 0.3 },
     { key: "shift",  label: "Shift start",     min: 0,    max: 1,    step: 0.005, default: 0 },
-    { key: "cover",  label: "Length",          min: 0.2,  max: 1,    step: 0.01,  default: 0.88 },
+    { key: "cover",  label: "Length",          min: 0.3,  max: 1,    step: 0.01,  default: 1 },
   ],
 
   // ---- custom controls: string input + per-letter chips ---------------------
@@ -200,18 +200,15 @@ export default {
           }
           shapes.push(shape);
         }
-        // guide from the dominant outline; normals flipped outward via this char's grid
-        const base = chaikin(resampleClosed(c.dom, 200), 1);
-        const inkAt = (gx, gy) => { const lx = Math.round(gx - c.dx), ly = Math.round(gy); return lx < 0 || ly < 0 || lx >= c.W || ly >= c.H ? 0 : c.grid[ly * c.W + lx]; };
-        const NP = base.length;
-        const guide = base.map((p, i) => {
-          const a = base[(i - 1 + NP) % NP], b = base[(i + 1) % NP];
-          let nx = b.y - a.y, ny = -(b.x - a.x); const L = Math.hypot(nx, ny) || 1; nx /= L; ny /= L;
-          if (inkAt(p.x + nx * 3, p.y + ny * 3)) { nx = -nx; ny = -ny; }
-          const w = toW(p), wl = Math.hypot(nx, -ny) || 1;
-          return { x: w.x, y: w.y, nx: nx / wl, ny: -ny / wl };
-        });
-        gmap.set(c.index, guide);
+        // per-letter ink sampler (world px -> this char's grid) + world bbox, for lacing
+        const dx = c.dx, gr = c.grid, GW = c.W, GH = c.H;
+        const sample = (wx, wy) => {
+          const lx = Math.round(wx / K + cx - dx), ly = Math.round(cy - wy / K);
+          return lx < 0 || ly < 0 || lx >= GW || ly >= GH ? 0 : gr[ly * GW + lx];
+        };
+        let bxn = 1e9, bxx = -1e9, byn = 1e9, byx = -1e9;
+        for (const o of c.outers) for (const p of o.outer) { const w = toW(p); if (w.x < bxn) bxn = w.x; if (w.x > bxx) bxx = w.x; if (w.y < byn) byn = w.y; if (w.y > byx) byx = w.y; }
+        gmap.set(c.index, { minx: bxn, maxx: bxx, miny: byn, maxy: byx, sample });
       }
       const wb = (() => { const a = toW({ x: minx, y: miny }), b = toW({ x: maxx, y: maxy }); return { minx: Math.min(a.x, b.x), maxx: Math.max(a.x, b.x), miny: Math.min(a.y, b.y), maxy: Math.max(a.y, b.y) }; })();
       return { shapes, guides: gmap, worldBox: wb };
@@ -232,31 +229,39 @@ export default {
       scene.add(letterGroup);
     }
 
-    function ribbonFor(guide, kColor) {
+    // Over-under lacing: sweep a ribbon along the glyph's long axis, oscillating across
+    // the short axis. Depth is driven by ink — behind the strokes, in front of the gaps —
+    // so it threads through. The sweep is monotonic on one axis, so it can never knot.
+    function ribbonFor(L, kColor) {
       const r = rng(seed * 131 + 7 + kColor * 17);
-      const phA = r() * TAU, phB = r() * TAU, phC = r() * TAU;
-      const NP = guide.length, zf = Math.max(1, Math.round(P.passes * 0.55) + 1);
+      const phase = r() * TAU;
+      const Wd = L.maxx - L.minx, Hd = L.maxy - L.miny;
+      const vertical = Hd > Wd * 1.1;                 // run down tall letters, across wide ones
+      const mainLen = vertical ? Hd : Wd, crossLen = vertical ? Wd : Hd;
+      const crossC = vertical ? (L.minx + L.maxx) / 2 : (L.miny + L.maxy) / 2;
+      const pad = mainLen * 0.3;
+      const mainLo = (vertical ? L.miny : L.minx) - pad, mainHi = (vertical ? L.maxy : L.maxx) + pad;
+      const fullM = mainHi - mainLo;
+      const startM = mainLo + fullM * (1 - P.cover) * P.shift, sweep = fullM * P.cover;
+      const amp = Math.max(crossLen * (0.4 + 0.95 * P.wrap), 0.1);
+
+      const N = 260, pX = [], pY = [], occ = [];
+      for (let i = 0; i <= N; i++) {
+        const t = i / N;
+        const mp = startM + sweep * t, co = amp * Math.sin(P.passes * TAU * t + phase);
+        const x = vertical ? crossC + co : mp;
+        const y = vertical ? mainHi - (mp - mainLo) : crossC + co;   // tall letters sweep top→bottom
+        pX.push(x); pY.push(y); occ.push(L.sample(x, y) ? 1 : 0);
+      }
+      // smooth occupancy so the dive behind / rise in front is an eased fold, not a step
+      const win = 7, occS = occ.map((_, i) => { let s = 0, c = 0; for (let j = -win; j <= win; j++) { const k = i + j; if (k >= 0 && k <= N) { s += occ[k]; c++; } } return s / c; });
       const ctrl = [];
-      for (let i = 0; i < NP; i++) {
-        const s = i / NP, gp = guide[i];
-        const rad = P.wrap * Math.sin(P.passes * TAU * s + phA) + 0.45 * P.wrap * Math.sin(P.passes * 1.7 * TAU * s + phB);
-        const z = P.depth * Math.sin(zf * TAU * s + phC);
-        ctrl.push(new THREE.Vector3(gp.x + gp.nx * rad, gp.y + gp.ny * rad, z));
-      }
-      const closed = P.cover >= 0.999;
-      let curve;
-      if (closed) {
-        const off = Math.floor(P.shift * NP), pts = [];
-        for (let i = 0; i < NP; i++) pts.push(ctrl[(off + i) % NP]);
-        curve = new THREE.CatmullRomCurve3(pts, true, "catmullrom", 0.5);
-      } else {
-        const start = Math.floor(P.shift * NP), count = Math.max(4, Math.floor(P.cover * NP)), pts = [];
-        for (let i = 0; i <= count; i++) pts.push(ctrl[(start + i) % NP]);
-        curve = new THREE.CatmullRomCurve3(pts, false, "catmullrom", 0.5);
-      }
-      const M = 360, pos = [], tan = [];
-      for (let i = 0; i <= M; i++) { const t = i / M; pos.push(curve.getPoint(closed ? t % 1 : t)); tan.push(curve.getTangent(closed ? t % 1 : t).normalize()); }
-      const up = Math.abs(tan[0].y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+      for (let i = 0; i <= N; i++) ctrl.push(new THREE.Vector3(pX[i], pY[i], P.depth * (1 - 2 * occS[i])));
+      const curve = new THREE.CatmullRomCurve3(ctrl, false, "catmullrom", 0.5);
+
+      const M = 420, pos = [], tan = [];
+      for (let i = 0; i <= M; i++) { const t = i / M; pos.push(curve.getPoint(t)); tan.push(curve.getTangent(t).normalize()); }
+      const up = Math.abs(tan[0].z) > 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
       let normal = up.clone().sub(tan[0].clone().multiplyScalar(up.dot(tan[0]))).normalize();
       const normals = [normal.clone()];
       for (let i = 1; i <= M; i++) {
@@ -266,10 +271,10 @@ export default {
       }
       const verts = [], idx = [];
       for (let i = 0; i <= M; i++) {
-        const T = tan[i], N = normals[i], Bn = T.clone().cross(N).normalize();
+        const T = tan[i], Nv = normals[i], Bn = T.clone().cross(Nv).normalize();
         const theta = P.twist * Math.PI * 2 * (i / M);
-        const dir = N.clone().multiplyScalar(Math.cos(theta)).add(Bn.clone().multiplyScalar(Math.sin(theta)));
-        const taper = closed ? 1 : 1 - 0.85 * Math.pow(Math.abs((i / M) * 2 - 1), 2.2);
+        const dir = Nv.clone().multiplyScalar(Math.cos(theta)).add(Bn.clone().multiplyScalar(Math.sin(theta)));
+        const taper = 1 - 0.8 * Math.pow(Math.abs((i / M) * 2 - 1), 2.4);
         const hw = P.width * taper;
         const Lp = pos[i].clone().add(dir.clone().multiplyScalar(hw)), Rp = pos[i].clone().add(dir.clone().multiplyScalar(-hw));
         verts.push(Lp.x, Lp.y, Lp.z, Rp.x, Rp.y, Rp.z);
@@ -286,7 +291,7 @@ export default {
       disposeRibbons();
       ribbonGroup = new THREE.Group();
       const picks = (P.picks || []).filter((i) => guides.has(i));
-      picks.forEach((i, k) => { const g = guides.get(i); if (g && g.length > 8) ribbonGroup.add(ribbonFor(g, k)); });
+      picks.forEach((i, k) => { const g = guides.get(i); if (g && g.sample) ribbonGroup.add(ribbonFor(g, k)); });
       scene.add(ribbonGroup);
     }
 
