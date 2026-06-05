@@ -8,6 +8,7 @@ let CURATED = [];
 
 import cloth from "./engines/cloth.js";
 import ribbon from "./engines/ribbon3d.js";
+import letter from "./engines/letterWrap.js";
 import scope from "./engines/oscilloscope.js";
 import flow from "./engines/flowField.js";
 import quilt from "./engines/quilt.js";
@@ -15,7 +16,7 @@ import graph from "./engines/graph.js";
 
 loadFonts();
 
-const ENGINES = [scope, ribbon, cloth, flow, quilt, graph];
+const ENGINES = [scope, ribbon, letter, cloth, flow, quilt, graph];
 const STAGE = 1080;
 const WMH = 240;
 
@@ -63,7 +64,7 @@ function resolveColors() {
 }
 function ctx() {
   const { ground, ink, colors } = resolveColors();
-  return { w: STAGE, h: STAGE, params: state.params[state.engineId], colors, ink, ground, seed: state.seed, data: state.data[state.engineId] };
+  return { w: STAGE, h: STAGE, params: state.params[state.engineId], colors, ink, ground, seed: state.seed, font: state.font, data: state.data[state.engineId] };
 }
 
 // ---- mark area (SVG engines emit strings; live engines mount themselves) ----
@@ -200,6 +201,7 @@ function renderControls() {
   const sliders = e.params.map((pr) => {
     const v = p[pr.key];
     if (pr.type === "color") return `<label class="swrow gi"><span>${pr.label}</span><input type="color" data-param="${pr.key}" value="${v}"><code>${v}</code></label>`;
+    if (pr.type === "text") return `<label class="textparam"><span>${pr.label}</span><input type="text" data-param="${pr.key}" value="${String(v).replace(/"/g, "&quot;")}" maxlength="8" class="text"></label>`;
     const isToggle = pr.min === 0 && pr.max === 1 && pr.step === 1;
     if (isToggle) return `<label class="toggle"><span>${pr.label}</span><input type="checkbox" data-param="${pr.key}" ${v ? "checked" : ""}></label>`;
     return `<label class="slider"><span>${pr.label}<em>${v}</em></span><input type="range" data-param="${pr.key}" min="${pr.min}" max="${pr.max}" step="${pr.step}" value="${v}"></label>`;
@@ -272,7 +274,7 @@ function wire() {
   document.querySelectorAll("[data-engine]").forEach((b) => b.onclick = () => { state.engineId = b.dataset.engine; renderAll(); });
 
   document.querySelectorAll("[data-param]").forEach((inp) => inp.oninput = () => {
-    const val = inp.type === "checkbox" ? (inp.checked ? 1 : 0) : inp.type === "color" ? inp.value : Number(inp.value);
+    const val = inp.type === "checkbox" ? (inp.checked ? 1 : 0) : (inp.type === "color" || inp.type === "text") ? inp.value : Number(inp.value);
     state.params[e.id][inp.dataset.param] = val;
     if (inp.type === "range") { const em = inp.parentElement.querySelector("em"); if (em) em.textContent = inp.value; }
     if (inp.type === "color") { const cd = inp.parentElement.querySelector("code"); if (cd) cd.textContent = inp.value; }
@@ -314,7 +316,7 @@ function wire() {
       const f = CURATED.find((x) => x.id === v.slice(4));
       if (f) state.font = { name: f.label, css: f.css, weight: f.weight, italic: f.italic, instance: f.instance, curated: true, id: f.id };
     } else state.font = ALL_FONTS.find((f) => f.name === v);
-    renderControls(); renderWordmark();
+    renderControls(); renderWordmark(); updateMark();   // live engines (Letter weave) read the selected face
   };
 
   const eSVG = document.getElementById("expSVG"); if (eSVG) eSVG.onclick = () => exportComposition("svg");
