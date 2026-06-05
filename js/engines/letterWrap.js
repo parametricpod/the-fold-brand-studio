@@ -24,10 +24,11 @@ export default {
   label: "Letter weave",
   kind: "live",
   hideWordmark: true,
-  blurb: "Your string, set large and flat. Tick letters below to wrap a folded ribbon around each. Scroll to zoom · drag to pan.",
+  blurb: "Your string, set large and flat. Tick letters to wrap a folded ribbon around each — or turn on ‘Weave across letters’ for one ribbon threading through them. Scroll to zoom · drag to pan.",
   params: [
     { key: "glyphs",  type: "hidden", default: "THE FOLD" },
     { key: "picks",   type: "hidden", default: [4] },
+    { key: "band",    label: "Weave across letters", min: 0, max: 1, step: 1, default: 0 },
     { key: "wrap",    label: "Wrap spread",   min: 0.02, max: 0.8,  step: 0.005, default: 0.28 },
     { key: "depth",   label: "Wrap depth",    min: 0.15, max: 1.3,  step: 0.01,  default: 0.6 },
     { key: "passes",  label: "Wraps",         min: 1,    max: 10,   step: 1,     default: 3 },
@@ -87,10 +88,10 @@ export default {
     scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 
     const letterMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.85, metalness: 0 });
-    let letterGroup = null, ribbonGroup = null, specs = [], guides = new Map(), worldBox = null, contourKey = "", token = 0;
+    let letterGroup = null, ribbonGroup = null, specs = [], guides = new Map(), worldBox = null, gSample = null, contourKey = "", token = 0;
     let zoom = 1, panX = 0, panY = 0, dirty = true, seedAtBuild = seed;
     const picksChanged = (a, b) => { a = a || []; b = b || []; return a.length !== b.length || a.some((v, i) => v !== b[i]); };
-    const PATH_KEYS = ["wrap", "depth", "passes", "chaos", "width", "twist", "cover"];
+    const PATH_KEYS = ["band", "wrap", "depth", "passes", "chaos", "width", "twist", "cover"];
     const LT = 0.3; // real letter thickness in z — a solid occluder (still reads 2D head-on)
 
     // ---- contour helpers (marching squares) ---------------------------------
@@ -223,8 +224,14 @@ export default {
         for (const o of c.outers) for (const p of o.outer) { const w = toW(p); if (w.x < bxn) bxn = w.x; if (w.x > bxx) bxx = w.x; if (w.y < byn) byn = w.y; if (w.y > byx) byx = w.y; }
         gmap.set(c.index, { minx: bxn, maxx: bxx, miny: byn, maxy: byx, sample });
       }
+      // global sampler: is a world point over ANY letter's ink? (used by band mode to clear all glyphs)
+      const gSample = (wx, wy) => {
+        const gx = wx / K + cx, gy = cy - wy / K;
+        for (const c of chars) { const lx = Math.round(gx - c.dx), ly = Math.round(gy); if (lx >= 0 && ly >= 0 && lx < c.W && ly < c.H && c.grid[ly * c.W + lx]) return 1; }
+        return 0;
+      };
       const wb = (() => { const a = toW({ x: minx, y: miny }), b = toW({ x: maxx, y: maxy }); return { minx: Math.min(a.x, b.x), maxx: Math.max(a.x, b.x), miny: Math.min(a.y, b.y), maxy: Math.max(a.y, b.y) }; })();
-      return { shapes, guides: gmap, worldBox: wb };
+      return { shapes, guides: gmap, worldBox: wb, gSample };
     }
 
     // ---- meshes -------------------------------------------------------------
@@ -284,6 +291,45 @@ export default {
       return new THREE.CatmullRomCurve3(pts, false, "catmullrom", 0.5);
     }
 
+    // Band mode: ONE ribbon sweeping horizontally across the selected letters, weaving in
+    // front of and behind each glyph it passes. z alternates front/back along the span; a
+    // GLOBAL ink sampler pushes it clear of whatever letter it's over, so it threads through
+    // the word without colliding. y gently serpentines so it crosses strokes at varied heights.
+    function generateBandPath(idxs) {
+      const r = rng(seed * 131 + 911);
+      const phase = r() * TAU, nY = makeNoise(r), nZ = makeNoise(r), nA = makeNoise(r);
+      let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
+      for (const i of idxs) { const b = guides.get(i); minx = Math.min(minx, b.minx); maxx = Math.max(maxx, b.maxx); miny = Math.min(miny, b.miny); maxy = Math.max(maxy, b.maxy); }
+      const spanW = maxx - minx, bandH = Math.max(0.1, maxy - miny);
+      const pad = bandH * 0.4;
+      const xLo = minx - pad, xHi = maxx + pad, fullX = xHi - xLo;
+      const startX = xLo + fullX * (1 - P.cover) * 0.5, sweepX = fullX * P.cover;
+      const yc = (miny + maxy) / 2;
+      const yAmp = clamp(bandH * (0.16 + 0.5 * P.wrap), 0.05, bandH * 0.72);
+      const band = LT / 2 + P.width * 0.5 + 0.05;
+      const zCycles = clamp(Math.round((spanW / bandH) * (0.55 + P.passes / 4)), 2, 48);
+      const yLobes = Math.max(1, Math.round(zCycles * 0.45));
+      const N = clamp(Math.round((spanW / bandH) * 100), 360, 1400);
+
+      const raw = [];
+      for (let i = 0; i <= N; i++) {
+        const t = i / N;
+        const env = smoothstep(0, 0.06, t) * smoothstep(0, 0.06, 1 - t);   // uniform across span, quick ease at ends
+        const x = startX + sweepX * t;
+        const y = yc + yAmp * env * (Math.sin(yLobes * TAU * t + phase) + P.chaos * 0.5 * nY(t));
+        const zth = zCycles * TAU * t + phase * 1.7 + P.chaos * 2.0 * nA(t);
+        const zr = P.depth * env * (1 + P.chaos * 0.5 * nZ(t)) * Math.cos(zth);
+        raw.push({ x, y, zr, side: Math.cos(zth) >= 0 ? 1 : -1, ink: gSample(x, y) ? 1 : 0 });
+      }
+      const win = 6, pts = [];
+      for (let i = 0; i <= N; i++) {
+        let s = 0, c = 0; for (let j = -win; j <= win; j++) { const k = i + j; if (k >= 0 && k <= N) { s += raw[k].ink; c++; } }
+        const w = smoothstep(0.12, 0.55, s / c), R = raw[i], zc = R.side * Math.max(Math.abs(R.zr), band);
+        pts.push(new THREE.Vector3(R.x, R.y, R.zr * (1 - w) + zc * w));
+      }
+      return new THREE.CatmullRomCurve3(pts, false, "catmullrom", 0.5);
+    }
+
     function buildStrip(curve, a, b) {
       const M = 240, pos = [], tan = [];
       for (let i = 0; i <= M; i++) { const u = a + (b - a) * (i / M); pos.push(curve.getPoint(u)); tan.push(curve.getTangent(u).normalize()); }
@@ -316,13 +362,16 @@ export default {
       disposeRibbons();
       ribbonGroup = new THREE.Group();
       const picks = (P.picks || []).filter((i) => guides.has(i));
-      picks.forEach((i, k) => {
-        const L = guides.get(i); if (!L || !L.sample) return;
-        const curve = generatePath(L, k);
+      const addRibbon = (curve, k) => {
         const mat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.55, metalness: 0.05, color: new THREE.Color(colors[k % colors.length] || ink) });
         const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
         ribbonGroup.add(mesh); specs.push({ curve, mesh });
-      });
+      };
+      if (P.band && picks.length && gSample) {
+        addRibbon(generateBandPath(picks), 0);              // one ribbon woven across the selected letters
+      } else {
+        picks.forEach((i, k) => { const L = guides.get(i); if (L && L.sample) addRibbon(generatePath(L, k), k); });
+      }
       scene.add(ribbonGroup);
       layoutRibbons(0);
     }
@@ -357,7 +406,7 @@ export default {
         if (my !== token) return;
         const r = buildContours();
         if (!r) { disposeLetters(); disposeRibbons(); guides = new Map(); dirty = true; return; }
-        guides = r.guides; worldBox = r.worldBox;
+        guides = r.guides; worldBox = r.worldBox; gSample = r.gSample;
         buildLetters(r.shapes); buildRibbons(); applyCam(); contourKey = want; dirty = true;
       });
     }
