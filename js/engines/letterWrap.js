@@ -299,7 +299,7 @@ export default {
     // the dives are shallow and gentle instead of the deep, steep swings that used to shard.
     function generateBandPath(idxs) {
       const r = rng(seed * 131 + 911);
-      const phase = r() * TAU, nY = makeNoise(r), nZ = makeNoise(r);
+      const phase = r() * TAU, nY = makeNoise(r);
       let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
       for (const i of idxs) { const b = guides.get(i); minx = Math.min(minx, b.minx); maxx = Math.max(maxx, b.maxx); miny = Math.min(miny, b.miny); maxy = Math.max(maxy, b.maxy); }
       const spanW = maxx - minx, bandH = Math.max(0.1, maxy - miny), nLetters = idxs.length;
@@ -307,8 +307,8 @@ export default {
       const startX = xLo + fullX * (1 - P.cover) * 0.5, sweepX = fullX * P.cover, yc = (miny + maxy) / 2;
       const yAmp = clamp(bandH * (0.12 + 0.42 * P.wrap), 0.04, bandH * 0.62);
       const yLobes = Math.max(1, Math.round(nLetters * 0.6));
-      const clearance = LT / 2 + P.width + 0.045;             // sit just clear of the glyph face
-      const reach = clearance * (1 + 0.8 * P.depth);          // how far in front / behind (bounded by depth)
+      const clearance = LT / 2 + P.width + 0.05;              // ribbon must clear the glyph by at least this in z
+      const ride = clearance * (1 + 0.3 * P.depth);           // how far in front / behind it actually rides (depth pops it)
       const N = clamp(Math.round((spanW / bandH) * 90), 360, 900);
 
       // sample x, a gentle serpentine y, and ink occupancy across the sweep
@@ -356,13 +356,27 @@ export default {
         for (let i = letters[letters.length - 1][1]; i <= N; i++) sideAt[i] = sgn(letters.length - 1);
       }
 
-      // z = bounded reach * side, eased in/out at the span ends, with a faint organic wobble
-      const pts = [];
-      for (let i = 0; i <= N; i++) {
-        const t = i / N, env = smoothstep(0, 0.07, t) * smoothstep(0, 0.07, 1 - t);
-        const z = (reach * sideAt[i] + P.chaos * 0.1 * reach * nZ(t)) * env;
-        pts.push(new THREE.Vector3(X[i], Y[i], z));
+      // z drape: ride ±`ride` wherever the ribbon's strip would overlap a glyph (the ink is dilated
+      // by the half-width so the WHOLE strip clears, not just the centreline), and let z relax across
+      // the ink-free gaps by Laplacian smoothing — a taut fabric span that crosses the mid-plane only
+      // in clear space. xy is left untouched (monotonic sweep + gentle serpentine) so the centreline
+      // can never buckle and the camera-stable strip never shards. Ends thread in flat (z→0).
+      const R = P.width + 0.02;                                // dilate ink by the ribbon half-width
+      const over = (x, y) => {
+        if (gSample(x, y)) return true;
+        for (let a = 0; a < 6; a++) { const an = a * TAU / 6; if (gSample(x + R * Math.cos(an), y + R * Math.sin(an))) return true; }
+        return false;
+      };
+      const sgnOf = (i) => (sideAt[i] >= 0 ? 1 : -1);
+      const fixed = new Uint8Array(N + 1), z = new Float64Array(N + 1);
+      for (let i = 0; i <= N; i++) { fixed[i] = over(X[i], Y[i]) ? 1 : 0; z[i] = sgnOf(i) * ride; }
+      z[0] = 0; z[N] = 0;                                      // thread in / out flat
+      for (let it = 0; it < 60; it++) {
+        const prev = z.slice();
+        for (let i = 1; i < N; i++) z[i] = fixed[i] ? sgnOf(i) * ride : (prev[i - 1] + prev[i + 1]) * 0.5;
       }
+      const pts = [];
+      for (let i = 0; i <= N; i++) pts.push(new THREE.Vector3(X[i], Y[i], z[i]));
       return new THREE.CatmullRomCurve3(pts, false, "centripetal");
     }
 
