@@ -292,70 +292,117 @@ export default {
     }
 
     // Band mode: ONE ribbon sweeping horizontally across the selected letters, weaving in
-    // front of and behind each glyph it passes. z alternates front/back along the span; a
-    // GLOBAL ink sampler pushes it clear of whatever letter it's over, so it threads through
-    // the word without colliding. y gently serpentines so it crosses strokes at varied heights.
+    // front of and behind them. We split the sweep into "letter runs" (where it's over ink) and
+    // "gaps". Each run gets a held side (+front / −back) that ALTERNATES run→run; the sign only
+    // ever changes by smoothstepping across a gap — so a front↔back crossing always happens in
+    // clear space, never on a stroke. z reach is bounded (a small multiple of the clearance), so
+    // the dives are shallow and gentle instead of the deep, steep swings that used to shard.
     function generateBandPath(idxs) {
       const r = rng(seed * 131 + 911);
       const phase = r() * TAU, nY = makeNoise(r), nZ = makeNoise(r);
       let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
       for (const i of idxs) { const b = guides.get(i); minx = Math.min(minx, b.minx); maxx = Math.max(maxx, b.maxx); miny = Math.min(miny, b.miny); maxy = Math.max(maxy, b.maxy); }
       const spanW = maxx - minx, bandH = Math.max(0.1, maxy - miny), nLetters = idxs.length;
-      const pad = bandH * 0.4, xLo = minx - pad, xHi = maxx + pad, fullX = xHi - xLo;
+      const pad = bandH * 0.45, xLo = minx - pad, xHi = maxx + pad, fullX = xHi - xLo;
       const startX = xLo + fullX * (1 - P.cover) * 0.5, sweepX = fullX * P.cover, yc = (miny + maxy) / 2;
-      const yAmp = clamp(bandH * (0.14 + 0.45 * P.wrap), 0.04, bandH * 0.66);
-      const yLobes = Math.max(1, Math.round(nLetters * 0.5));
-      const band = LT / 2 + P.width * 0.85 + 0.07;           // depth clearance the ribbon must keep over ink
-      const N = clamp(Math.round((spanW / bandH) * 80), 300, 760);
+      const yAmp = clamp(bandH * (0.12 + 0.42 * P.wrap), 0.04, bandH * 0.62);
+      const yLobes = Math.max(1, Math.round(nLetters * 0.6));
+      const clearance = LT / 2 + P.width + 0.045;             // sit just clear of the glyph face
+      const reach = clearance * (1 + 0.8 * P.depth);          // how far in front / behind (bounded by depth)
+      const N = clamp(Math.round((spanW / bandH) * 90), 360, 900);
 
+      // sample x, a gentle serpentine y, and ink occupancy across the sweep
       const X = [], Y = [], INK = [];
       for (let i = 0; i <= N; i++) {
-        const t = i / N, env = smoothstep(0, 0.06, t) * smoothstep(0, 0.06, 1 - t);
+        const t = i / N, env = smoothstep(0, 0.05, t) * smoothstep(0, 0.05, 1 - t);
         const x = startX + sweepX * t;
-        const y = yc + yAmp * env * (Math.sin(yLobes * TAU * t + phase) + P.chaos * 0.4 * nY(t));
+        const y = yc + yAmp * env * (Math.sin(yLobes * TAU * t + phase) + P.chaos * 0.35 * nY(t));
         X.push(x); Y.push(y); INK.push(gSample(x, y) ? 1 : 0);
       }
-      const win = Math.max(3, Math.round(N * 0.02));         // smooth the ink field (widens stroke influence)
+      const win = Math.max(4, Math.round(N * 0.025));          // soften the ink field so runs are clean
       const inkS = INK.map((_, i) => { let s = 0, c = 0; for (let j = -win; j <= win; j++) { const k = i + j; if (k >= 0 && k <= N) { s += INK[k]; c++; } } return s / c; });
 
-      // The weave's front↔back phase advances ONLY in the gaps between letters, so a side flip
-      // never lands on a stroke (that was the kink/collision). Over a letter the side is held and
-      // z is clamped past the clearance band; centripetal Catmull-Rom avoids overshoot loops.
-      const totalGap = inkS.reduce((a, v) => a + (1 - v), 0) || 1;
-      const flips = clamp(Math.round(nLetters * (0.5 + P.passes / 5)), 1, 40);
-      const step = flips * Math.PI / totalGap;
-      let ph = phase * 1.3; const pts = [];
+      // segment into letter runs (ink over threshold); merge tiny gaps, drop tiny runs
+      const TH = 0.4, minLen = Math.max(2, Math.round(N * 0.015));
+      const raw = []; let inRun = false, s0 = 0;
       for (let i = 0; i <= N; i++) {
-        ph += (1 - inkS[i]) * step;
-        const side = Math.cos(ph), t = i / N, env = smoothstep(0, 0.06, t) * smoothstep(0, 0.06, 1 - t);
-        const rawZ = P.depth * env * side * (1 + P.chaos * 0.35 * nZ(t));
-        const w = smoothstep(0.12, 0.6, inkS[i]);
-        const clamped = (side >= 0 ? 1 : -1) * Math.max(Math.abs(rawZ), band);
-        pts.push(new THREE.Vector3(X[i], Y[i], rawZ * (1 - w) + clamped * w));
+        const hot = inkS[i] >= TH;
+        if (hot && !inRun) { inRun = true; s0 = i; } else if (!hot && inRun) { inRun = false; raw.push([s0, i - 1]); }
+      }
+      if (inRun) raw.push([s0, N]);
+      const runs = [];
+      for (const [a, b] of raw) {
+        if (runs.length && a - runs[runs.length - 1][1] <= minLen) runs[runs.length - 1][1] = b;
+        else runs.push([a, b]);
+      }
+      const letters = runs.filter(([a, b]) => b - a >= minLen);
+
+      // target weave side per sample: hold a sign over each letter, alternate run→run, and
+      // smoothstep the sign across the GAP between runs (so every crossing lands in clear space).
+      const sideAt = new Float32Array(N + 1);
+      if (!letters.length) {
+        for (let i = 0; i <= N; i++) sideAt[i] = Math.sin(Math.PI * (i / N));   // no ink → one gentle bow
+      } else {
+        const sgn = (k) => (k % 2 === 0 ? 1 : -1);
+        for (let i = 0; i < letters[0][0]; i++) sideAt[i] = sgn(0);
+        for (let k = 0; k < letters.length; k++) {
+          const [a, b] = letters[k];
+          for (let i = a; i <= b; i++) sideAt[i] = sgn(k);
+          if (k < letters.length - 1) {
+            const c = letters[k + 1][0], g = c - b;
+            for (let i = b; i <= c; i++) { const f = g > 0 ? smoothstep(0, 1, (i - b) / g) : 1; sideAt[i] = sgn(k) * (1 - f) + sgn(k + 1) * f; }
+          }
+        }
+        for (let i = letters[letters.length - 1][1]; i <= N; i++) sideAt[i] = sgn(letters.length - 1);
+      }
+
+      // z = bounded reach * side, eased in/out at the span ends, with a faint organic wobble
+      const pts = [];
+      for (let i = 0; i <= N; i++) {
+        const t = i / N, env = smoothstep(0, 0.07, t) * smoothstep(0, 0.07, 1 - t);
+        const z = (reach * sideAt[i] + P.chaos * 0.1 * reach * nZ(t)) * env;
+        pts.push(new THREE.Vector3(X[i], Y[i], z));
       }
       return new THREE.CatmullRomCurve3(pts, false, "centripetal");
     }
 
-    function buildStrip(curve, a, b) {
+    function buildStrip(curve, a, b, faceView) {
       const M = 240, pos = [], tan = [];
       for (let i = 0; i <= M; i++) { const u = a + (b - a) * (i / M); pos.push(curve.getPoint(u)); tan.push(curve.getTangent(u).normalize()); }
-      const up = Math.abs(tan[0].z) > 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
-      let normal = up.clone().sub(tan[0].clone().multiplyScalar(up.dot(tan[0]))).normalize();
-      const normals = [normal.clone()];
-      for (let i = 1; i <= M; i++) {
-        const T0 = tan[i - 1], T = tan[i], ax = T0.clone().cross(T), len = ax.length(), nn = normals[i - 1].clone();
-        if (len > 1e-6) { ax.normalize(); nn.applyAxisAngle(ax, Math.asin(Math.min(1, len))); }
-        nn.sub(T.clone().multiplyScalar(nn.dot(T))).normalize(); normals.push(nn);
-      }
       const verts = [], idx = [];
-      for (let i = 0; i <= M; i++) {
-        const T = tan[i], Nv = normals[i], Bn = T.clone().cross(Nv).normalize();
-        const theta = P.twist * Math.PI * 2 * (i / M);
-        const dir = Nv.clone().multiplyScalar(Math.cos(theta)).add(Bn.clone().multiplyScalar(Math.sin(theta)));
-        const taper = 1 - 0.8 * Math.pow(Math.abs((i / M) * 2 - 1), 2.4);
-        const hw = P.width * taper;
-        const Lp = pos[i].clone().add(dir.clone().multiplyScalar(hw)), Rp = pos[i].clone().add(dir.clone().multiplyScalar(-hw));
-        verts.push(Lp.x, Lp.y, Lp.z, Rp.x, Rp.y, Rp.z);
+      if (faceView) {
+        // Camera-stable frame (band mode): the strip's width is kept in the screen plane —
+        // perpendicular to the path's xy-direction — so steep front↔back dives just foreshorten
+        // the ribbon instead of spinning the frame into shards. Twist folds it around the path.
+        const view = new THREE.Vector3(0, 0, 1);
+        for (let i = 0; i <= M; i++) {
+          const T = tan[i];
+          const dir = new THREE.Vector3().crossVectors(view, T);
+          if (dir.lengthSq() < 1e-8) dir.set(0, 1, 0); else dir.normalize();
+          const out = new THREE.Vector3().crossVectors(T, dir).normalize();
+          const theta = P.twist * Math.PI * 2 * (i / M);
+          const d = dir.multiplyScalar(Math.cos(theta)).add(out.multiplyScalar(Math.sin(theta)));
+          const taper = 1 - 0.8 * Math.pow(Math.abs((i / M) * 2 - 1), 2.4), hw = P.width * taper;
+          const Lp = pos[i].clone().add(d.clone().multiplyScalar(hw)), Rp = pos[i].clone().add(d.clone().multiplyScalar(-hw));
+          verts.push(Lp.x, Lp.y, Lp.z, Rp.x, Rp.y, Rp.z);
+        }
+      } else {
+        const up = Math.abs(tan[0].z) > 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+        let normal = up.clone().sub(tan[0].clone().multiplyScalar(up.dot(tan[0]))).normalize();
+        const normals = [normal.clone()];
+        for (let i = 1; i <= M; i++) {
+          const T0 = tan[i - 1], T = tan[i], ax = T0.clone().cross(T), len = ax.length(), nn = normals[i - 1].clone();
+          if (len > 1e-6) { ax.normalize(); nn.applyAxisAngle(ax, Math.asin(Math.min(1, len))); }
+          nn.sub(T.clone().multiplyScalar(nn.dot(T))).normalize(); normals.push(nn);
+        }
+        for (let i = 0; i <= M; i++) {
+          const T = tan[i], Nv = normals[i], Bn = T.clone().cross(Nv).normalize();
+          const theta = P.twist * Math.PI * 2 * (i / M);
+          const dir = Nv.clone().multiplyScalar(Math.cos(theta)).add(Bn.clone().multiplyScalar(Math.sin(theta)));
+          const taper = 1 - 0.8 * Math.pow(Math.abs((i / M) * 2 - 1), 2.4), hw = P.width * taper;
+          const Lp = pos[i].clone().add(dir.clone().multiplyScalar(hw)), Rp = pos[i].clone().add(dir.clone().multiplyScalar(-hw));
+          verts.push(Lp.x, Lp.y, Lp.z, Rp.x, Rp.y, Rp.z);
+        }
       }
       for (let i = 0; i < M; i++) { const o = i * 2; idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
       const geo = new THREE.BufferGeometry();
@@ -368,15 +415,15 @@ export default {
       disposeRibbons();
       ribbonGroup = new THREE.Group();
       const picks = (P.picks || []).filter((i) => guides.has(i));
-      const addRibbon = (curve, k) => {
+      const addRibbon = (curve, k, faceView) => {
         const mat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.55, metalness: 0.05, color: new THREE.Color(colors[k % colors.length] || ink) });
         const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
-        ribbonGroup.add(mesh); specs.push({ curve, mesh });
+        ribbonGroup.add(mesh); specs.push({ curve, mesh, faceView: !!faceView });
       };
       if (P.band && picks.length && gSample) {
-        addRibbon(generateBandPath(picks), 0);              // one ribbon woven across the selected letters
+        addRibbon(generateBandPath(picks), 0, true);        // one ribbon woven across the selected letters
       } else {
-        picks.forEach((i, k) => { const L = guides.get(i); if (L && L.sample) addRibbon(generatePath(L, k), k); });
+        picks.forEach((i, k) => { const L = guides.get(i); if (L && L.sample) addRibbon(generatePath(L, k), k, false); });
       }
       scene.add(ribbonGroup);
       layoutRibbons(0);
@@ -390,7 +437,7 @@ export default {
     }
     function layoutRibbons(clock) {
       const [a, b] = windowAB(clock);
-      for (const s of specs) { s.mesh.geometry.dispose(); s.mesh.geometry = buildStrip(s.curve, a, b); }
+      for (const s of specs) { s.mesh.geometry.dispose(); s.mesh.geometry = buildStrip(s.curve, a, b, s.faceView); }
     }
 
     function applyCam() {
