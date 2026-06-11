@@ -1,9 +1,13 @@
 // letterWrap.js — the string IS the artwork. The text you type is set large and flat
 // (2D, no rotation) in the chosen wordmark typeface. Tick the letter instances you want
-// and a folded ribbon wraps around each one — passing in FRONT of the stroke and BEHIND
-// it (the glyph is a real solid in the depth buffer, so it occludes the back passes).
-// The wrap path is a seeded, slightly chaotic helix that clears the letter (no collision),
-// and the ribbon can be a finite segment that travels along the path. Scroll to zoom.
+// and a folded satin ribbon wraps around each one — passing in FRONT of the stroke and
+// BEHIND it (the glyph is a real solid in the depth buffer, so it occludes back passes).
+// Weave mode threads ONE ribbon across the picked letters: a meandering, anchor-built
+// path that crosses each letter at a seeded height/angle, swoops through the gaps, and
+// drapes in z like fabric over solids — pinned flat against a glyph face wherever the
+// strip overlaps ink, with smoothly rounded fold shoulders at every letter edge. The
+// ribbon is lit as satin (sheen + anisotropy + a studio environment) and breathes with
+// a slow billow. Scroll to zoom · drag to pan.
 import * as THREE from "three";
 import { rng } from "../util.js";
 
@@ -24,7 +28,7 @@ export default {
   label: "Letter weave",
   kind: "live",
   hideWordmark: true,
-  blurb: "Your string, set large and flat. Tick letters to wrap a folded ribbon around each — or turn on ‘Weave across letters’ for one ribbon threading through them. Scroll to zoom · drag to pan.",
+  blurb: "Your string, set large and flat. Tick letters to wrap a folded ribbon around each — or turn on ‘Weave across letters’ for one satin ribbon threading through them. Scroll to zoom · drag to pan.",
   params: [
     { key: "glyphs",  type: "hidden", default: "THE FOLD" },
     { key: "picks",   type: "hidden", default: [4] },
@@ -79,15 +83,53 @@ export default {
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     const scene = new THREE.Scene();
     const camera = new THREE.OrthographicCamera(-1.8, 1.8, 1.8, -1.8, -50, 50);
     camera.position.set(0, 0, 12);
 
-    const keyL = new THREE.DirectionalLight(0xffffff, 1.7); keyL.position.set(-1.4, 2, 3); scene.add(keyL);
-    const rimL = new THREE.DirectionalLight(0xffffff, 0.7); rimL.position.set(2, -1, 2); scene.add(rimL);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    // Lighting rig — calibrated so a flat +z letter face sums to ~1.0 (brand color stays true).
+    // The key is SPLIT into a shadow-casting half and a free half, so the ribbon's cast shadow
+    // on the letters is a soft ~35% dip instead of a black hole.
+    const keyDir = new THREE.Vector3(-2.2, 2.6, 3.5).normalize();
+    const keyA = new THREE.DirectionalLight(0xfff3e4, 0.55);   // casts the ribbon's shadow
+    keyA.castShadow = true;
+    keyA.shadow.mapSize.set(1024, 1024);
+    keyA.shadow.normalBias = 0.05; keyA.shadow.bias = -0.0003;
+    const keyB = new THREE.DirectionalLight(0xfff3e4, 0.42);   // same direction, no shadow
+    const rimL = new THREE.DirectionalLight(0xdfe9ff, 0.32); rimL.position.set(2.5, -1.5, 2);
+    scene.add(keyA, keyA.target, keyB, rimL, new THREE.AmbientLight(0xffffff, 0.16));
 
-    const letterMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.85, metalness: 0 });
+    // Studio environment (PMREM) — a few bright softboxes in a dim room. This is what makes
+    // the satin actually CATCH light: long warm key reflection, cool counter-fill, top streak.
+    function makeEnv() {
+      const sc = new THREE.Scene();
+      const panel = (w, h, intensity, hex, x, y, z) => {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+          new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(intensity) }));
+        m.position.set(x, y, z); m.lookAt(0, 0, 0); sc.add(m);
+      };
+      sc.add(new THREE.Mesh(new THREE.SphereGeometry(20, 24, 12),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(0x3d4149), side: THREE.BackSide })));
+      panel(9, 3.2, 5.0, 0xfff1e0, -6, 6, 8);    // warm key softbox, upper left front
+      panel(7, 1.6, 2.6, 0xdde8ff, 7, -3, 6);    // cool fill, lower right
+      panel(16, 1.0, 3.6, 0xffffff, 0, 9, 2);    // long top streak — the satin highlight band
+      panel(6, 1.2, 1.6, 0xffd9c2, -7, -6, 3);   // low warm bounce
+      const pm = new THREE.PMREMGenerator(renderer);
+      const tex = pm.fromScene(sc, 0.045).texture;
+      pm.dispose();
+      sc.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
+      return tex;
+    }
+    scene.environment = makeEnv();
+
+    const letterMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.85, metalness: 0, envMapIntensity: 0 });
+
+    // Backdrop that exists only to receive the ribbon's floating shadow (depth cue).
+    const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.12 }));
+    backdrop.position.z = -1.8; backdrop.receiveShadow = true; scene.add(backdrop);
+
     let letterGroup = null, ribbonGroup = null, specs = [], guides = new Map(), worldBox = null, gSample = null, contourKey = "", token = 0;
     let zoom = 1, panX = 0, panY = 0, dirty = true, seedAtBuild = seed;
     const picksChanged = (a, b) => { a = a || []; b = b || []; return a.length !== b.length || a.some((v, i) => v !== b[i]); };
@@ -244,7 +286,9 @@ export default {
       for (const s of shapes) {
         const geo = new THREE.ExtrudeGeometry(s, { depth: LT, bevelEnabled: false, curveSegments: 3 });
         geo.translate(0, 0, -LT / 2);
-        letterGroup.add(new THREE.Mesh(geo, letterMat));
+        const mesh = new THREE.Mesh(geo, letterMat);
+        mesh.receiveShadow = true;
+        letterGroup.add(mesh);
       }
       scene.add(letterGroup);
     }
@@ -291,39 +335,81 @@ export default {
       return new THREE.CatmullRomCurve3(pts, false, "centripetal");
     }
 
-    // Band mode: ONE ribbon sweeping horizontally across the selected letters, weaving in
-    // front of and behind them. We split the sweep into "letter runs" (where it's over ink) and
-    // "gaps". Each run gets a held side (+front / −back) that ALTERNATES run→run; the sign only
-    // ever changes by smoothstepping across a gap — so a front↔back crossing always happens in
-    // clear space, never on a stroke. z reach is bounded (a small multiple of the clearance), so
-    // the dives are shallow and gentle instead of the deep, steep swings that used to shard.
-    function generateBandPath(idxs) {
+    // ---- weave mode: ONE satin ribbon threading across the picked letters ----
+    // The path is built from seeded ANCHORS, not a sine: it enters off-canvas, crosses each
+    // letter at its own height and angle, and swoops through the gaps (an S through wide word
+    // spaces) — a meander, not a wave. Along that path the ribbon treats the glyphs as SOLIDS:
+    // ink is sampled with the strip's half-width dilated in, and wherever the strip would
+    // overlap a letter its z is PINNED flat against the front or back face (sides alternate
+    // letter→letter; a flip is skipped when the gap is too tight to cross cleanly). Between
+    // pins, z relaxes like a taut membrane, then the shoulders are ROUNDED (smooth + re-pin)
+    // so every fold over a letter edge is a soft fabric fold, not a crease. The result is a
+    // dense polyline TABLE — the strip is built straight from it (linear interpolation, no
+    // spline overshoot, nothing can ever poke into a glyph).
+    function generateBandTable(idxs) {
       const r = rng(seed * 131 + 911);
-      const phase = r() * TAU, nY = makeNoise(r);
+      const nY = makeNoise(r), nBillow = makeNoise(r), nSway = makeNoise(r);
+      const Ls = idxs.map((i) => guides.get(i)).sort((a, b) => (a.minx + a.maxx) - (b.minx + b.maxx));
       let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
-      for (const i of idxs) { const b = guides.get(i); minx = Math.min(minx, b.minx); maxx = Math.max(maxx, b.maxx); miny = Math.min(miny, b.miny); maxy = Math.max(maxy, b.maxy); }
-      const spanW = maxx - minx, bandH = Math.max(0.1, maxy - miny), nLetters = idxs.length;
-      const pad = bandH * 0.45, xLo = minx - pad, xHi = maxx + pad, fullX = xHi - xLo;
-      const startX = xLo + fullX * (1 - P.cover) * 0.5, sweepX = fullX * P.cover, yc = (miny + maxy) / 2;
-      const yAmp = clamp(bandH * (0.12 + 0.42 * P.wrap), 0.04, bandH * 0.62);
-      const yLobes = Math.max(1, Math.round(nLetters * 0.6));
-      const clearance = LT / 2 + P.width + 0.05;              // ribbon must clear the glyph by at least this in z
-      const ride = clearance * (1 + 0.3 * P.depth);           // how far in front / behind it actually rides (depth pops it)
-      const N = clamp(Math.round((spanW / bandH) * 90), 360, 900);
+      for (const b of Ls) { minx = Math.min(minx, b.minx); maxx = Math.max(maxx, b.maxx); miny = Math.min(miny, b.miny); maxy = Math.max(maxy, b.maxy); }
+      const H = Math.max(0.1, maxy - miny), yc = (miny + maxy) / 2;
+      const clearance = LT / 2 + P.width + 0.05;            // ribbon face-to-face distance off a glyph
+      const ride = clearance * (1 + 0.35 * P.depth);
+      const pad = H * 0.5 + (maxx - minx) * 0.06;
+      const drama = 0.3 + 0.9 * P.wrap;                     // swoop scale in the gaps
+      const yLo = miny - H * 0.85, yHi = maxy + H * 0.85;
 
-      // sample x, a gentle serpentine y, and ink occupancy across the sweep
-      const X = [], Y = [], INK = [];
+      // -- anchors: entry → (swoop, cross letter) per letter → exit
+      const A = [];
+      let prevY = yc + (r() - 0.5) * H * 0.7;
+      A.push({ x: minx - pad * 1.45, y: clamp(prevY + (r() - 0.5) * H * 0.35, yLo, yHi) });
+      A.push({ x: minx - pad * 0.55, y: prevY });
+      Ls.forEach((L, k) => {
+        const Lh = Math.max(0.05, L.maxy - L.miny), Lw = Math.max(0.05, L.maxx - L.minx);
+        const fly = Ls.length >= 4 && r() < P.chaos * 0.22;            // occasionally soar OVER a letter
+        const hm = fly ? L.maxy + H * 0.22 : L.miny + Lh * (0.22 + 0.56 * r());
+        const tilt = fly ? (r() - 0.5) * H * 0.12 : (r() - 0.5) * Lh * (0.25 + 0.55 * P.wrap);
+        const h0 = clamp(hm - tilt / 2, yLo, yHi), h1 = clamp(hm + tilt / 2, yLo, yHi);
+        const gx0 = k === 0 ? minx - pad * 0.55 : Ls[k - 1].maxx, gx1 = L.minx, gw = gx1 - gx0;
+        if (gw > H * 0.34) {                                          // room to swoop before this letter
+          const dir = r() < 0.5 ? 1 : -1;
+          let amp = H * drama * (0.35 + 0.75 * r()) * Math.min(1, gw / (H * 0.9));
+          if (Math.abs(h0 - prevY) > H * 0.45) amp *= 0.4;            // the diagonal IS the drama — don't pile on
+          if (gw > H * 1.6) {                                         // wide gap (word space): S-swoop
+            A.push({ x: gx0 + gw * 0.26, y: clamp(prevY + dir * amp * 0.7, yLo, yHi) });
+            A.push({ x: gx0 + gw * 0.74, y: clamp(h0 - dir * amp * 0.5, yLo, yHi) });
+          } else {
+            A.push({ x: gx0 + gw * (0.35 + 0.3 * r()), y: clamp((prevY + h0) / 2 + dir * amp, yLo, yHi) });
+          }
+        }
+        A.push({ x: L.minx + Lw * 0.06, y: h0 });
+        A.push({ x: L.maxx - Lw * 0.06, y: h1 });
+        prevY = h1;
+      });
+      A.push({ x: maxx + pad * 0.55, y: clamp(prevY + (r() - 0.5) * H * 0.45, yLo, yHi) });
+      A.push({ x: maxx + pad * 1.45, y: clamp(prevY + (r() - 0.5) * H * 0.8, yLo, yHi) });
+      for (let i = 1; i < A.length; i++) if (A[i].x <= A[i - 1].x + 0.015) A[i].x = A[i - 1].x + 0.015; // keep x ordered (kerned overlaps)
+
+      // -- sample the meander uniformly by arc length, add a whisper of drift
+      const curve2 = new THREE.CatmullRomCurve3(A.map((p) => new THREE.Vector3(p.x, p.y, 0)), false, "centripetal", 0.5);
+      const arcLen = curve2.getLength();
+      const NS = clamp(Math.round((arcLen / H) * 150), 500, 1600);
+      let sp = curve2.getSpacedPoints(NS);
+      const ds = arcLen / NS;
+      if (P.cover < 1) { const i0 = Math.round(NS * (1 - P.cover) * 0.5); sp = sp.slice(i0, sp.length - i0); }
+      const N = sp.length - 1;
+      const X = new Float64Array(N + 1), Y = new Float64Array(N + 1), INK = new Float64Array(N + 1);
       for (let i = 0; i <= N; i++) {
-        const t = i / N, env = smoothstep(0, 0.05, t) * smoothstep(0, 0.05, 1 - t);
-        const x = startX + sweepX * t;
-        const y = yc + yAmp * env * (Math.sin(yLobes * TAU * t + phase) + P.chaos * 0.35 * nY(t));
-        X.push(x); Y.push(y); INK.push(gSample(x, y) ? 1 : 0);
+        X[i] = sp[i].x;
+        Y[i] = clamp(sp[i].y + H * 0.05 * P.chaos * nY(i / N), yLo - H * 0.1, yHi + H * 0.1);
+        INK[i] = gSample(X[i], Y[i]) ? 1 : 0;
       }
-      const win = Math.max(4, Math.round(N * 0.025));          // soften the ink field so runs are clean
-      const inkS = INK.map((_, i) => { let s = 0, c = 0; for (let j = -win; j <= win; j++) { const k = i + j; if (k >= 0 && k <= N) { s += INK[k]; c++; } } return s / c; });
+      const win = Math.max(3, Math.round(N * 0.02));
+      const inkS = new Float64Array(N + 1);
+      for (let i = 0; i <= N; i++) { let s = 0, c = 0; for (let j = -win; j <= win; j++) { const k = i + j; if (k >= 0 && k <= N) { s += INK[k]; c++; } } inkS[i] = s / c; }
 
-      // segment into letter runs (ink over threshold); merge tiny gaps, drop tiny runs
-      const TH = 0.4, minLen = Math.max(2, Math.round(N * 0.015));
+      // -- letter runs along the path (ink over threshold); merge tiny gaps, drop tiny runs
+      const TH = 0.4, minLen = Math.max(2, Math.round(N * 0.012));
       const raw = []; let inRun = false, s0 = 0;
       for (let i = 0; i <= N; i++) {
         const hot = inkS[i] >= TH;
@@ -337,107 +423,226 @@ export default {
       }
       const letters = runs.filter(([a, b]) => b - a >= minLen);
 
-      // target weave side per sample: hold a sign over each letter, alternate run→run, and
-      // smoothstep the sign across the GAP between runs (so every crossing lands in clear space).
+      // -- weave side per run: alternate front/back, but DON'T flip across a gap too tight
+      // to cross cleanly (the ribbon just stays on its side — drapes past both letters).
+      const Rdil = P.width + 0.03;                          // ink dilation: the WHOLE strip must clear
+      const fringe = Math.ceil(Rdil / ds) + 2;              // pins reach ~this far past a run's ends
+      const minCross = Math.max(4, Math.round((ride * 1.1) / ds) + 2 * fringe);
+      const signs = [];
+      letters.forEach(([a], k) => {
+        if (k === 0) signs.push(r() < 0.5 ? 1 : -1);
+        else signs.push(a - letters[k - 1][1] >= minCross ? -signs[k - 1] : signs[k - 1]);
+      });
+
+      // target side field: hold the sign over each run (+fringe), ease across the rest of the gap
       const sideAt = new Float32Array(N + 1);
       if (!letters.length) {
         for (let i = 0; i <= N; i++) sideAt[i] = Math.sin(Math.PI * (i / N));   // no ink → one gentle bow
       } else {
-        const sgn = (k) => (k % 2 === 0 ? 1 : -1);
-        for (let i = 0; i < letters[0][0]; i++) sideAt[i] = sgn(0);
+        for (let i = 0; i < letters[0][0]; i++) sideAt[i] = signs[0];
         for (let k = 0; k < letters.length; k++) {
           const [a, b] = letters[k];
-          for (let i = a; i <= b; i++) sideAt[i] = sgn(k);
+          for (let i = a; i <= b; i++) sideAt[i] = signs[k];
           if (k < letters.length - 1) {
             const c = letters[k + 1][0], g = c - b;
-            for (let i = b; i <= c; i++) { const f = g > 0 ? smoothstep(0, 1, (i - b) / g) : 1; sideAt[i] = sgn(k) * (1 - f) + sgn(k + 1) * f; }
+            const fr = Math.min(Math.floor(g * 0.33), fringe);
+            const b2 = b + fr, c2 = c - fr;
+            for (let i = b; i <= c; i++) {
+              const f = i <= b2 ? 0 : i >= c2 ? 1 : smoothstep(0, 1, (i - b2) / Math.max(1, c2 - b2));
+              sideAt[i] = signs[k] * (1 - f) + signs[k + 1] * f;
+            }
           }
         }
-        for (let i = letters[letters.length - 1][1]; i <= N; i++) sideAt[i] = sgn(letters.length - 1);
+        for (let i = letters[letters.length - 1][1]; i <= N; i++) sideAt[i] = signs[letters.length - 1];
       }
 
-      // z drape: ride ±`ride` wherever the ribbon's strip would overlap a glyph (the ink is dilated
-      // by the half-width so the WHOLE strip clears, not just the centreline), and let z relax across
-      // the ink-free gaps by Laplacian smoothing — a taut fabric span that crosses the mid-plane only
-      // in clear space. xy is left untouched (monotonic sweep + gentle serpentine) so the centreline
-      // can never buckle and the camera-stable strip never shards. Ends thread in flat (z→0).
-      const R = P.width + 0.02;                                // dilate ink by the ribbon half-width
+      // -- z drape against SOLIDS: pin z flat against a glyph face wherever the dilated strip
+      // overlaps ink; relax the free spans (taut membrane), then ROUND the fold shoulders
+      // (smooth everything, re-pin) so edges fold softly instead of creasing. Ends thread flat.
       const over = (x, y) => {
         if (gSample(x, y)) return true;
-        for (let a = 0; a < 6; a++) { const an = a * TAU / 6; if (gSample(x + R * Math.cos(an), y + R * Math.sin(an))) return true; }
+        for (let a = 0; a < 8; a++) { const an = (a * TAU) / 8; if (gSample(x + Rdil * Math.cos(an), y + Rdil * Math.sin(an))) return true; }
         return false;
       };
       const sgnOf = (i) => (sideAt[i] >= 0 ? 1 : -1);
-      const fixed = new Uint8Array(N + 1), z = new Float64Array(N + 1);
-      for (let i = 0; i <= N; i++) { fixed[i] = over(X[i], Y[i]) ? 1 : 0; z[i] = sgnOf(i) * ride; }
-      z[0] = 0; z[N] = 0;                                      // thread in / out flat
-      for (let it = 0; it < 60; it++) {
+      // each run rides at a slightly different height off the face, so two passes over the
+      // same letter can never be coplanar (z-fight shimmer) — and the stack reads organic.
+      // The field is smoothed so plateau heights blend continuously (never below clearance).
+      const rideAt = new Float64Array(N + 1).fill(ride);
+      letters.forEach(([a, b], k) => { const rk = ride * (1 + 0.11 * (k % 3)); for (let i = a; i <= b; i++) rideAt[i] = rk; });
+      for (let it = 0; it < 30; it++) { const p2 = rideAt.slice(); for (let i = 1; i < N; i++) rideAt[i] = (p2[i - 1] + p2[i] + p2[i + 1]) / 3; }
+      const fixed = new Uint8Array(N + 1);
+      let z = new Float64Array(N + 1);
+      for (let i = 0; i <= N; i++) { fixed[i] = over(X[i], Y[i]) ? 1 : 0; z[i] = sideAt[i] * rideAt[i]; }
+      const pin = (arr) => { for (let i = 0; i <= N; i++) if (fixed[i]) arr[i] = sgnOf(i) * rideAt[i]; arr[0] = 0; arr[N] = 0; };
+      pin(z);
+      for (let it = 0; it < 50; it++) {                     // taut spans between pinned faces
         const prev = z.slice();
-        for (let i = 1; i < N; i++) z[i] = fixed[i] ? sgnOf(i) * ride : (prev[i - 1] + prev[i + 1]) * 0.5;
+        for (let i = 1; i < N; i++) if (!fixed[i]) z[i] = (prev[i - 1] + prev[i + 1]) * 0.5;
+        z[0] = 0; z[N] = 0;
       }
-      const pts = [];
-      for (let i = 0; i <= N; i++) pts.push(new THREE.Vector3(X[i], Y[i], z[i]));
-      return new THREE.CatmullRomCurve3(pts, false, "centripetal");
+      for (let it = 0; it < 26; it++) {                     // rounded fabric shoulders at every edge
+        const prev = z.slice();
+        for (let i = 1; i < N; i++) z[i] = prev[i - 1] * 0.25 + prev[i] * 0.5 + prev[i + 1] * 0.25;
+        pin(z);
+      }
+
+      // -- self-collision: where the meander crosses ITSELF in screen space (loops), push the
+      // two strands apart in z (feathered, free samples only) so they layer like real ribbon
+      // instead of z-fighting. `damp` quiets the billow there so they can't drift back together.
+      const damp = new Float64Array(N + 1).fill(1);
+      const sepZ = Math.max(0.07, P.width * 1.2), nearXY = (P.width * 1.35) ** 2;
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 2; i <= N; i += 2) for (let jj = i + 60; jj <= N - 2; jj += 2) {
+          const dx = X[i] - X[jj], dy = Y[i] - Y[jj];
+          if (dx * dx + dy * dy > nearXY) continue;
+          const dzn = z[i] - z[jj], need = (sepZ - Math.abs(dzn)) / 2;
+          if (need <= 0) continue;
+          const s = dzn >= 0 ? 1 : -1;
+          const feather = (idx, amt) => {
+            for (let k = -16; k <= 16; k++) {
+              const m = idx + k;
+              if (m > 0 && m < N && !fixed[m]) { z[m] += amt * (1 - smoothstep(5, 16, Math.abs(k))); damp[m] = Math.min(damp[m], 0.3); }
+            }
+          };
+          if (!fixed[i] && !fixed[jj]) { feather(i, s * need); feather(jj, -s * need); }
+          else if (!fixed[i]) feather(i, s * need * 2);
+          else if (!fixed[jj]) feather(jj, -s * need * 2);
+        }
+      }
+
+      // -- billow freedom: 0 at pins (fabric is held), 1 mid-gap (fabric is free to breathe)
+      const dist = new Float64Array(N + 1).fill(1e9);
+      for (let i = 0; i <= N; i++) if (fixed[i] || i === 0 || i === N) dist[i] = 0;
+      for (let i = 1; i <= N; i++) dist[i] = Math.min(dist[i], dist[i - 1] + 1);
+      for (let i = N - 1; i >= 0; i--) dist[i] = Math.min(dist[i], dist[i + 1] + 1);
+
+      // -- resample everything to a uniform-arc TABLE (3D length, so travel glides evenly)
+      const cum = new Float64Array(N + 1);
+      for (let i = 1; i <= N; i++) cum[i] = cum[i - 1] + Math.hypot(X[i] - X[i - 1], Y[i] - Y[i - 1], z[i] - z[i - 1]);
+      const total = cum[N], NN = 1000;
+      const TX = new Float32Array(NN + 1), TY = new Float32Array(NN + 1), TZ = new Float32Array(NN + 1), TE = new Float32Array(NN + 1);
+      let j = 0;
+      for (let i = 0; i <= NN; i++) {
+        const want = (i / NN) * total;
+        while (j < N - 1 && cum[j + 1] < want) j++;
+        const f = (want - cum[j]) / Math.max(1e-9, cum[j + 1] - cum[j]);
+        TX[i] = X[j] + (X[j + 1] - X[j]) * f;
+        TY[i] = Y[j] + (Y[j + 1] - Y[j]) * f;
+        TZ[i] = z[j] + (z[j + 1] - z[j]) * f;
+        const d = dist[j] + (dist[j + 1] - dist[j]) * f;
+        TE[i] = smoothstep(3, 22, d) * (damp[j] + (damp[j + 1] - damp[j]) * f);
+      }
+      // normalized z-slope → drives the fold roll (the satin glint as it dives)
+      const SL = new Float32Array(NN + 1);
+      let mx = 1e-6;
+      for (let i = 1; i < NN; i++) { SL[i] = (TZ[i + 1] - TZ[i - 1]) * 0.5; mx = Math.max(mx, Math.abs(SL[i])); }
+      for (let pass = 0; pass < 3; pass++) { const p2 = SL.slice(); for (let i = 1; i < NN; i++) SL[i] = (p2[i - 1] + p2[i] + p2[i + 1]) / 3; }
+      for (let i = 0; i <= NN; i++) SL[i] /= mx;
+
+      return { X: TX, Y: TY, Z: TZ, EN: TE, SL, NN, ride, H, nBillow, nSway };
     }
 
-    function buildStrip(curve, a, b, faceView) {
-      const M = 240, pos = [], tan = [];
-      for (let i = 0; i <= M; i++) { const u = a + (b - a) * (i / M); pos.push(curve.getPoint(u)); tan.push(curve.getTangent(u).normalize()); }
-      const verts = [], idx = [];
-      if (faceView) {
-        // Camera-stable frame (band mode): the strip's width is kept in the screen plane —
-        // perpendicular to the path's xy-direction — so steep front↔back dives just foreshorten
-        // the ribbon instead of spinning the frame into shards. Twist folds it around the path.
-        const view = new THREE.Vector3(0, 0, 1);
-        for (let i = 0; i <= M; i++) {
-          const T = tan[i];
-          const dir = new THREE.Vector3().crossVectors(view, T);
-          if (dir.lengthSq() < 1e-8) dir.set(0, 1, 0); else dir.normalize();
-          const out = new THREE.Vector3().crossVectors(T, dir).normalize();
-          const theta = P.twist * Math.PI * 2 * (i / M);
-          const d = dir.multiplyScalar(Math.cos(theta)).add(out.multiplyScalar(Math.sin(theta)));
-          const taper = 1 - 0.8 * Math.pow(Math.abs((i / M) * 2 - 1), 2.4), hw = P.width * taper;
-          const Lp = pos[i].clone().add(d.clone().multiplyScalar(hw)), Rp = pos[i].clone().add(d.clone().multiplyScalar(-hw));
-          verts.push(Lp.x, Lp.y, Lp.z, Rp.x, Rp.y, Rp.z);
-        }
-      } else {
-        const up = Math.abs(tan[0].z) > 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
-        let normal = up.clone().sub(tan[0].clone().multiplyScalar(up.dot(tan[0]))).normalize();
-        const normals = [normal.clone()];
-        for (let i = 1; i <= M; i++) {
-          const T0 = tan[i - 1], T = tan[i], ax = T0.clone().cross(T), len = ax.length(), nn = normals[i - 1].clone();
-          if (len > 1e-6) { ax.normalize(); nn.applyAxisAngle(ax, Math.asin(Math.min(1, len))); }
-          nn.sub(T.clone().multiplyScalar(nn.dot(T))).normalize(); normals.push(nn);
-        }
-        for (let i = 0; i <= M; i++) {
-          const T = tan[i], Nv = normals[i], Bn = T.clone().cross(Nv).normalize();
-          const theta = P.twist * Math.PI * 2 * (i / M);
-          const dir = Nv.clone().multiplyScalar(Math.cos(theta)).add(Bn.clone().multiplyScalar(Math.sin(theta)));
-          const taper = 1 - 0.8 * Math.pow(Math.abs((i / M) * 2 - 1), 2.4), hw = P.width * taper;
-          const Lp = pos[i].clone().add(dir.clone().multiplyScalar(hw)), Rp = pos[i].clone().add(dir.clone().multiplyScalar(-hw));
-          verts.push(Lp.x, Lp.y, Lp.z, Rp.x, Rp.y, Rp.z);
-        }
-      }
+    // shared geometry tail: indexed strip + uv (u along the length) + normals + tangents
+    function stripGeo(verts, uvs, M) {
+      const idx = [];
       for (let i = 0; i < M; i++) { const o = i * 2; idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
       geo.setIndex(idx); geo.computeVertexNormals();
+      try { geo.computeTangents(); } catch (e) { /* anisotropy falls back to derivative tangents */ }
       return geo;
+    }
+
+    // Weave strip: built straight from the table (no spline — nothing can overshoot into a
+    // glyph). Camera-stable frame: width stays in the screen plane, so dives foreshorten
+    // instead of spinning. A slope-driven ROLL folds the face over as it dives behind a
+    // letter (the satin fold), and a slow billow lets the free spans breathe like silk.
+    function buildBandStrip(tbl, a, b, time) {
+      const M = 520, n = tbl.NN;
+      const billowAmp = tbl.ride * (0.22 + 0.5 * P.chaos);
+      const maxRoll = clamp(0.3 + 0.45 * P.twist, 0, 1.15);
+      const px = new Float64Array(M + 1), py = new Float64Array(M + 1), pz = new Float64Array(M + 1), rl = new Float64Array(M + 1);
+      for (let i = 0; i <= M; i++) {
+        const u = a + (b - a) * (i / M), f = clamp(u, 0, 1) * n;
+        const j = Math.min(n - 1, Math.floor(f)), t = f - j;
+        const lerp = (A) => A[j] + (A[j + 1] - A[j]) * t;
+        const en = lerp(tbl.EN);
+        px[i] = lerp(tbl.X) + 0;
+        py[i] = lerp(tbl.Y) + en * tbl.H * 0.018 * tbl.nSway(u * 2.6 + time * 0.09);
+        pz[i] = lerp(tbl.Z) + en * billowAmp * tbl.nBillow(u * 2.0 + time * 0.13);
+        rl[i] = maxRoll * lerp(tbl.SL) * (1 + 0.12 * Math.sin(time * 0.5 + u * 9));
+      }
+      const verts = [], uvs = [];
+      const view = new THREE.Vector3(0, 0, 1), T = new THREE.Vector3(), dir = new THREE.Vector3(), out = new THREE.Vector3(), d = new THREE.Vector3();
+      for (let i = 0; i <= M; i++) {
+        const i0 = Math.max(0, i - 1), i1 = Math.min(M, i + 1);
+        T.set(px[i1] - px[i0], py[i1] - py[i0], pz[i1] - pz[i0]).normalize();
+        dir.crossVectors(view, T);
+        if (dir.lengthSq() < 1e-8) dir.set(0, 1, 0); else dir.normalize();
+        out.crossVectors(T, dir).normalize();
+        const th = rl[i];
+        d.copy(dir).multiplyScalar(Math.cos(th)).addScaledVector(out, Math.sin(th));
+        const taper = 1 - 0.8 * Math.pow(Math.abs((i / M) * 2 - 1), 2.4), hw = P.width * taper;
+        verts.push(px[i] + d.x * hw, py[i] + d.y * hw, pz[i] + d.z * hw,
+                   px[i] - d.x * hw, py[i] - d.y * hw, pz[i] - d.z * hw);
+        uvs.push((i / M) * 12, 0, (i / M) * 12, 1);
+      }
+      return stripGeo(verts, uvs, M);
+    }
+
+    // Per-letter strip (helix paths): parallel-transport frame along the curve.
+    function buildStrip(curve, a, b) {
+      const M = 240, pos = [], tan = [];
+      for (let i = 0; i <= M; i++) { const u = a + (b - a) * (i / M); pos.push(curve.getPoint(u)); tan.push(curve.getTangent(u).normalize()); }
+      const up = Math.abs(tan[0].z) > 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+      let normal = up.clone().sub(tan[0].clone().multiplyScalar(up.dot(tan[0]))).normalize();
+      const normals = [normal.clone()];
+      for (let i = 1; i <= M; i++) {
+        const T0 = tan[i - 1], T = tan[i], ax = T0.clone().cross(T), len = ax.length(), nn = normals[i - 1].clone();
+        if (len > 1e-6) { ax.normalize(); nn.applyAxisAngle(ax, Math.asin(Math.min(1, len))); }
+        nn.sub(T.clone().multiplyScalar(nn.dot(T))).normalize(); normals.push(nn);
+      }
+      const verts = [], uvs = [];
+      for (let i = 0; i <= M; i++) {
+        const T = tan[i], Nv = normals[i], Bn = T.clone().cross(Nv).normalize();
+        const theta = P.twist * Math.PI * 2 * (i / M);
+        const dir = Nv.clone().multiplyScalar(Math.cos(theta)).add(Bn.clone().multiplyScalar(Math.sin(theta)));
+        const taper = 1 - 0.8 * Math.pow(Math.abs((i / M) * 2 - 1), 2.4), hw = P.width * taper;
+        const Lp = pos[i].clone().add(dir.clone().multiplyScalar(hw)), Rp = pos[i].clone().add(dir.clone().multiplyScalar(-hw));
+        verts.push(Lp.x, Lp.y, Lp.z, Rp.x, Rp.y, Rp.z);
+        uvs.push((i / M) * 12, 0, (i / M) * 12, 1);
+      }
+      return stripGeo(verts, uvs, M);
+    }
+
+    // Satin: sheen for the fabric backscatter, anisotropy for the silk streak, env for the glow.
+    function satinMat(hex) {
+      const c = new THREE.Color(hex);
+      const m = new THREE.MeshPhysicalMaterial({
+        side: THREE.DoubleSide, color: c, roughness: 0.34, metalness: 0,
+        sheen: 1, sheenRoughness: 0.42, sheenColor: c.clone().lerp(new THREE.Color(0xffffff), 0.55),
+        envMapIntensity: 0.9, specularIntensity: 0.9,
+      });
+      m.anisotropy = 0.55;
+      m.shadowSide = THREE.DoubleSide;
+      return m;
     }
 
     function buildRibbons() {
       disposeRibbons();
       ribbonGroup = new THREE.Group();
       const picks = (P.picks || []).filter((i) => guides.has(i));
-      const addRibbon = (curve, k, faceView) => {
-        const mat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.55, metalness: 0.05, color: new THREE.Color(colors[k % colors.length] || ink) });
-        const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
-        ribbonGroup.add(mesh); specs.push({ curve, mesh, faceView: !!faceView });
+      const addRibbon = (spec, k) => {
+        const mesh = new THREE.Mesh(new THREE.BufferGeometry(), satinMat(colors[k % colors.length] || ink));
+        mesh.castShadow = true;
+        ribbonGroup.add(mesh); specs.push({ ...spec, mesh, k });
       };
       if (P.band && picks.length && gSample) {
-        addRibbon(generateBandPath(picks), 0, true);        // one ribbon woven across the selected letters
+        addRibbon({ table: generateBandTable(picks), band: true }, 0);   // one ribbon woven across the letters
       } else {
-        picks.forEach((i, k) => { const L = guides.get(i); if (L && L.sample) addRibbon(generatePath(L, k), k, false); });
+        picks.forEach((i, k) => { const L = guides.get(i); if (L && L.sample) addRibbon({ curve: generatePath(L, k), band: false }, k); });
       }
       scene.add(ribbonGroup);
       layoutRibbons(0);
@@ -451,7 +656,10 @@ export default {
     }
     function layoutRibbons(clock) {
       const [a, b] = windowAB(clock);
-      for (const s of specs) { s.mesh.geometry.dispose(); s.mesh.geometry = buildStrip(s.curve, a, b, s.faceView); }
+      for (const s of specs) {
+        s.mesh.geometry.dispose();
+        s.mesh.geometry = s.band ? buildBandStrip(s.table, a, b, clock) : buildStrip(s.curve, a, b);
+      }
     }
 
     function applyCam() {
@@ -461,9 +669,28 @@ export default {
       camera.left = -half; camera.right = half; camera.top = half; camera.bottom = -half;
       camera.zoom = zoom; camera.position.x = panX; camera.position.y = panY;
       camera.updateProjectionMatrix();
+      // fit the shadow camera + backdrop to the word
+      const cx = (worldBox.minx + worldBox.maxx) / 2, cy = (worldBox.miny + worldBox.maxy) / 2;
+      keyA.target.position.set(cx, cy, 0);
+      keyA.position.set(cx + keyDir.x * half * 4, cy + keyDir.y * half * 4, keyDir.z * half * 4);
+      keyB.position.copy(keyA.position);
+      const sc = keyA.shadow.camera, hs = half * 1.6;
+      sc.left = -hs; sc.right = hs; sc.top = hs; sc.bottom = -hs; sc.near = 0.5; sc.far = half * 10;
+      sc.updateProjectionMatrix();
+      backdrop.position.set(cx, cy, -1.8);
+      backdrop.scale.set(half * 12, half * 12, 1);
       dirty = true;
     }
-    function applyColors() { letterMat.color = new THREE.Color(ink); renderer.setClearColor(new THREE.Color(ground), 1); dirty = true; }
+    function applyColors() {
+      letterMat.color = new THREE.Color(ink);
+      renderer.setClearColor(new THREE.Color(ground), 1);
+      for (const s of specs) {
+        const c = new THREE.Color(colors[s.k % colors.length] || ink);
+        s.mesh.material.color.copy(c);
+        s.mesh.material.sheenColor.copy(c.clone().lerp(new THREE.Color(0xffffff), 0.55));
+      }
+      dirty = true;
+    }
 
     function rebuildAll() {
       const fam = (font && font.css) || "";
@@ -504,11 +731,11 @@ export default {
     canvas.addEventListener("pointerup", onUp);
     canvas.addEventListener("pointerleave", onUp);
 
-    // ---- render loop: animate only when auto-travel is on; else render on demand
+    // ---- render loop: weave mode is always alive (billow); helix mode animates with flow
     let raf = 0, running = true, animStart = performance.now();
     function loop(now) {
       if (!running) return;
-      const animating = P.flow > 0 && specs.length;
+      const animating = specs.length && (P.flow > 0 || specs.some((s) => s.band));
       if (animating) { layoutRibbons((now - animStart) / 1000); dirty = true; }
       if (dirty) { renderer.render(scene, camera); dirty = false; }
       raf = requestAnimationFrame(loop);
@@ -533,7 +760,10 @@ export default {
         canvas.removeEventListener("wheel", onWheel); canvas.removeEventListener("pointerdown", onDown);
         canvas.removeEventListener("pointermove", onMove); canvas.removeEventListener("pointerup", onUp);
         canvas.removeEventListener("pointerleave", onUp);
-        disposeLetters(); disposeRibbons(); letterMat.dispose(); renderer.dispose(); canvas.remove();
+        disposeLetters(); disposeRibbons();
+        backdrop.geometry.dispose(); backdrop.material.dispose();
+        if (scene.environment) scene.environment.dispose();
+        letterMat.dispose(); renderer.dispose(); canvas.remove();
       },
       snapshotCanvas() { renderer.render(scene, camera); return canvas; },
     };
