@@ -559,7 +559,7 @@ export default {
         out.crossVectors(T, dir).normalize();
         const th = rl[i];
         d.copy(dir).multiplyScalar(Math.cos(th)).addScaledVector(out, Math.sin(th));
-        const taper = 1 - 0.8 * Math.pow(Math.abs((i / M) * 2 - 1), 2.4), hw = P.width * taper;
+        const hw = P.width;                                 // constant width — a real satin ribbon, not a tapered worm
         verts.push(px[i] + d.x * hw, py[i] + d.y * hw, pz[i] + d.z * hw,
                    px[i] - d.x * hw, py[i] - d.y * hw, pz[i] - d.z * hw);
         uvs.push((i / M) * 12, 0, (i / M) * 12, 1);
