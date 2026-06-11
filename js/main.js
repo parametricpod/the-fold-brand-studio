@@ -204,6 +204,7 @@ function renderControls() {
     if (pr.type === "hidden") return "";
     if (pr.type === "color") return `<label class="swrow gi"><span>${pr.label}</span><input type="color" data-param="${pr.key}" value="${v}"><code>${v}</code></label>`;
     if (pr.type === "text") return `<label class="textparam"><span>${pr.label}</span><input type="text" data-param="${pr.key}" value="${String(v).replace(/"/g, "&quot;")}" maxlength="8" class="text"></label>`;
+    if (pr.type === "select") return `<label class="textparam"><span>${pr.label}</span><select data-param="${pr.key}">${(pr.options || []).map((o) => `<option value="${o.value}" ${String(v) === String(o.value) ? "selected" : ""}>${o.label}</option>`).join("")}</select></label>`;
     const isToggle = pr.min === 0 && pr.max === 1 && pr.step === 1;
     if (isToggle) return `<label class="toggle"><span>${pr.label}</span><input type="checkbox" data-param="${pr.key}" ${v ? "checked" : ""}></label>`;
     return `<label class="slider"><span>${pr.label}<em>${v}</em></span><input type="range" data-param="${pr.key}" min="${pr.min}" max="${pr.max}" step="${pr.step}" value="${v}"></label>`;
@@ -280,7 +281,7 @@ function wire() {
   if (e.wireControls) e.wireControls(document.getElementById("controls"), state.params[e.id], { redraw: () => updateMark() });
 
   document.querySelectorAll("[data-param]").forEach((inp) => inp.oninput = () => {
-    const val = inp.type === "checkbox" ? (inp.checked ? 1 : 0) : (inp.type === "color" || inp.type === "text") ? inp.value : Number(inp.value);
+    const val = inp.type === "checkbox" ? (inp.checked ? 1 : 0) : (inp.tagName === "SELECT" || inp.type === "color" || inp.type === "text") ? inp.value : Number(inp.value);
     state.params[e.id][inp.dataset.param] = val;
     if (inp.type === "range") { const em = inp.parentElement.querySelector("em"); if (em) em.textContent = inp.value; }
     if (inp.type === "color") { const cd = inp.parentElement.querySelector("code"); if (cd) cd.textContent = inp.value; }

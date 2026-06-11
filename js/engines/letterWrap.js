@@ -10,6 +10,7 @@
 // a slow billow. Scroll to zoom · drag to pan.
 import * as THREE from "three";
 import { rng } from "../util.js";
+import { makeEnv, ribbonMaterial } from "./materials.js";
 
 const TAU = Math.PI * 2;
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
@@ -32,6 +33,8 @@ export default {
   params: [
     { key: "glyphs",  type: "hidden", default: "THE FOLD" },
     { key: "picks",   type: "hidden", default: [4] },
+    { key: "material", label: "Material", type: "select", default: "satin",
+      options: [{ value: "satin", label: "Satin" }, { value: "sketch", label: "Pencil / cross-hatch" }] },
     { key: "band",    label: "Weave across letters", min: 0, max: 1, step: 1, default: 0 },
     { key: "wrap",    label: "Wrap spread",   min: 0.02, max: 0.8,  step: 0.005, default: 0.28 },
     { key: "depth",   label: "Wrap depth",    min: 0.15, max: 1.3,  step: 0.01,  default: 0.6 },
@@ -83,52 +86,25 @@ export default {
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     const scene = new THREE.Scene();
     const camera = new THREE.OrthographicCamera(-1.8, 1.8, 1.8, -1.8, -50, 50);
     camera.position.set(0, 0, 12);
 
     // Lighting rig — calibrated so a flat +z letter face sums to ~1.0 (brand color stays true).
-    // The key is SPLIT into a shadow-casting half and a free half, so the ribbon's cast shadow
-    // on the letters is a soft ~35% dip instead of a black hole.
+    // Two key halves at the same direction (the split is a historical artifact of an old shadow
+    // rig; kept so the satin's light sum is unchanged). No cast shadows — depth reads from the
+    // glyphs being real solids in the depth buffer, not from a dramatic drop shadow.
     const keyDir = new THREE.Vector3(-2.2, 2.6, 3.5).normalize();
-    const keyA = new THREE.DirectionalLight(0xfff3e4, 0.55);   // casts the ribbon's shadow
-    keyA.castShadow = true;
-    keyA.shadow.mapSize.set(1024, 1024);
-    keyA.shadow.normalBias = 0.05; keyA.shadow.bias = -0.0003;
-    const keyB = new THREE.DirectionalLight(0xfff3e4, 0.42);   // same direction, no shadow
+    const keyA = new THREE.DirectionalLight(0xfff3e4, 0.55);
+    const keyB = new THREE.DirectionalLight(0xfff3e4, 0.42);
     const rimL = new THREE.DirectionalLight(0xdfe9ff, 0.32); rimL.position.set(2.5, -1.5, 2);
     scene.add(keyA, keyA.target, keyB, rimL, new THREE.AmbientLight(0xffffff, 0.16));
 
-    // Studio environment (PMREM) — a few bright softboxes in a dim room. This is what makes
-    // the satin actually CATCH light: long warm key reflection, cool counter-fill, top streak.
-    function makeEnv() {
-      const sc = new THREE.Scene();
-      const panel = (w, h, intensity, hex, x, y, z) => {
-        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
-          new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(intensity) }));
-        m.position.set(x, y, z); m.lookAt(0, 0, 0); sc.add(m);
-      };
-      sc.add(new THREE.Mesh(new THREE.SphereGeometry(20, 24, 12),
-        new THREE.MeshBasicMaterial({ color: new THREE.Color(0x3d4149), side: THREE.BackSide })));
-      panel(9, 3.2, 5.0, 0xfff1e0, -6, 6, 8);    // warm key softbox, upper left front
-      panel(7, 1.6, 2.6, 0xdde8ff, 7, -3, 6);    // cool fill, lower right
-      panel(16, 1.0, 3.6, 0xffffff, 0, 9, 2);    // long top streak — the satin highlight band
-      panel(6, 1.2, 1.6, 0xffd9c2, -7, -6, 3);   // low warm bounce
-      const pm = new THREE.PMREMGenerator(renderer);
-      const tex = pm.fromScene(sc, 0.045).texture;
-      pm.dispose();
-      sc.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
-      return tex;
-    }
-    scene.environment = makeEnv();
+    // Studio environment (PMREM) — softboxes in a dim room — so the satin catches light.
+    scene.environment = makeEnv(renderer);
+    const pixScale = () => 12 * renderer.getPixelRatio();  // hatch spacing for the sketch material
 
     const letterMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.85, metalness: 0, envMapIntensity: 0 });
-
-    // Backdrop that exists only to receive the ribbon's floating shadow (depth cue).
-    const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.12 }));
-    backdrop.position.z = -1.8; backdrop.receiveShadow = true; scene.add(backdrop);
 
     let letterGroup = null, ribbonGroup = null, specs = [], guides = new Map(), worldBox = null, gSample = null, contourKey = "", token = 0;
     let zoom = 1, panX = 0, panY = 0, dirty = true, seedAtBuild = seed;
@@ -287,7 +263,6 @@ export default {
         const geo = new THREE.ExtrudeGeometry(s, { depth: LT, bevelEnabled: false, curveSegments: 3 });
         geo.translate(0, 0, -LT / 2);
         const mesh = new THREE.Mesh(geo, letterMat);
-        mesh.receiveShadow = true;
         letterGroup.add(mesh);
       }
       scene.add(letterGroup);
@@ -617,26 +592,16 @@ export default {
       return stripGeo(verts, uvs, M);
     }
 
-    // Satin: sheen for the fabric backscatter, anisotropy for the silk streak, env for the glow.
-    function satinMat(hex) {
-      const c = new THREE.Color(hex);
-      const m = new THREE.MeshPhysicalMaterial({
-        side: THREE.DoubleSide, color: c, roughness: 0.34, metalness: 0,
-        sheen: 1, sheenRoughness: 0.42, sheenColor: c.clone().lerp(new THREE.Color(0xffffff), 0.55),
-        envMapIntensity: 0.9, specularIntensity: 0.9,
-      });
-      m.anisotropy = 0.55;
-      m.shadowSide = THREE.DoubleSide;
-      return m;
-    }
+    const ribbonMat = (k) => ribbonMaterial(P.material, {
+      color: colors[k % colors.length] || ink, ink, paper: ground, scale: pixScale(),
+    });
 
     function buildRibbons() {
       disposeRibbons();
       ribbonGroup = new THREE.Group();
       const picks = (P.picks || []).filter((i) => guides.has(i));
       const addRibbon = (spec, k) => {
-        const mesh = new THREE.Mesh(new THREE.BufferGeometry(), satinMat(colors[k % colors.length] || ink));
-        mesh.castShadow = true;
+        const mesh = new THREE.Mesh(new THREE.BufferGeometry(), ribbonMat(k));
         ribbonGroup.add(mesh); specs.push({ ...spec, mesh, k });
       };
       if (P.band && picks.length && gSample) {
@@ -669,16 +634,11 @@ export default {
       camera.left = -half; camera.right = half; camera.top = half; camera.bottom = -half;
       camera.zoom = zoom; camera.position.x = panX; camera.position.y = panY;
       camera.updateProjectionMatrix();
-      // fit the shadow camera + backdrop to the word
+      // aim the key lights at the word (direction only — no shadow camera to fit)
       const cx = (worldBox.minx + worldBox.maxx) / 2, cy = (worldBox.miny + worldBox.maxy) / 2;
       keyA.target.position.set(cx, cy, 0);
       keyA.position.set(cx + keyDir.x * half * 4, cy + keyDir.y * half * 4, keyDir.z * half * 4);
       keyB.position.copy(keyA.position);
-      const sc = keyA.shadow.camera, hs = half * 1.6;
-      sc.left = -hs; sc.right = hs; sc.top = hs; sc.bottom = -hs; sc.near = 0.5; sc.far = half * 10;
-      sc.updateProjectionMatrix();
-      backdrop.position.set(cx, cy, -1.8);
-      backdrop.scale.set(half * 12, half * 12, 1);
       dirty = true;
     }
     function applyColors() {
@@ -686,8 +646,9 @@ export default {
       renderer.setClearColor(new THREE.Color(ground), 1);
       for (const s of specs) {
         const c = new THREE.Color(colors[s.k % colors.length] || ink);
-        s.mesh.material.color.copy(c);
-        s.mesh.material.sheenColor.copy(c.clone().lerp(new THREE.Color(0xffffff), 0.55));
+        const m = s.mesh.material;
+        if (m.isShaderMaterial) { m.uniforms.uInk.value.copy(c); m.uniforms.uPaper.value.set(ground); }
+        else { m.color.copy(c); m.sheenColor.copy(c.clone().lerp(new THREE.Color(0xffffff), 0.55)); }
       }
       dirty = true;
     }
@@ -750,7 +711,7 @@ export default {
         P = { ...nc.params }; colors = nc.colors; ink = nc.ink; ground = nc.ground; seed = nc.seed; font = nc.font;
         applyColors();
         if (want !== contourKey) { rebuildAll(); return; }                 // string / typeface → full retrace
-        const pathChanged = PATH_KEYS.some((k) => prev[k] !== P[k]) || seed !== prevSeed || picksChanged(prev.picks, P.picks);
+        const pathChanged = PATH_KEYS.some((k) => prev[k] !== P[k]) || seed !== prevSeed || picksChanged(prev.picks, P.picks) || prev.material !== P.material;
         if (pathChanged) { seedAtBuild = seed; buildRibbons(); applyCam(); } // regenerate wrap paths
         else { layoutRibbons((performance.now() - animStart) / 1000); }      // only travel / segment / flow → reposition
         dirty = true;
@@ -761,7 +722,6 @@ export default {
         canvas.removeEventListener("pointermove", onMove); canvas.removeEventListener("pointerup", onUp);
         canvas.removeEventListener("pointerleave", onUp);
         disposeLetters(); disposeRibbons();
-        backdrop.geometry.dispose(); backdrop.material.dispose();
         if (scene.environment) scene.environment.dispose();
         letterMat.dispose(); renderer.dispose(); canvas.remove();
       },

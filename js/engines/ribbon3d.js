@@ -4,13 +4,16 @@
 // seed yields a family of folded-ribbon edge forms. Echoes Eileen's favorite mark.
 import * as THREE from "three";
 import { rng } from "../util.js";
+import { makeEnv, ribbonMaterial } from "./materials.js";
 
 export default {
   id: "ribbon",
   label: "Folded ribbon 3D",
   kind: "live",
-  blurb: "A 3D strip swept along a seeded curve. Shift it along its path to find folded-ribbon forms. Drag to orbit.",
+  blurb: "A 3D strip swept along a seeded curve. Shift it along its path to find folded-ribbon forms. Satin or pencil cross-hatch. Drag to orbit.",
   params: [
+    { key: "material", label: "Material", type: "select", default: "satin",
+      options: [{ value: "satin", label: "Satin" }, { value: "sketch", label: "Pencil / cross-hatch" }] },
     { key: "shift",  label: "Shift along path", min: 0, max: 1,   step: 0.005, default: 0.2 },
     { key: "width",  label: "Ribbon width",     min: 0.04, max: 0.45, step: 0.01, default: 0.18 },
     { key: "twist",  label: "Twist",            min: 0, max: 2.5, step: 0.01, default: 0.8 },
@@ -35,11 +38,16 @@ export default {
 
     const group = new THREE.Group();
     scene.add(group);
-    const key = new THREE.DirectionalLight(0xffffff, 2.1); key.position.set(-2, 3, 2.5); scene.add(key);
-    const rim = new THREE.DirectionalLight(0xffffff, 0.8); rim.position.set(3, -1, -2); scene.add(rim);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    // Dim directionals — the satin's glow comes from the studio environment, not hot lights.
+    const key = new THREE.DirectionalLight(0xfff3e4, 0.5); key.position.set(-2, 3, 2.5); scene.add(key);
+    const rim = new THREE.DirectionalLight(0xdfe9ff, 0.32); rim.position.set(3, -1, -2); scene.add(rim);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.18));
+    scene.environment = makeEnv(renderer);
 
-    const mat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.62, metalness: 0.04 });
+    const makeMat = () => ribbonMaterial(P.material, {
+      color: colors[0] || ink, ink, paper: ground, scale: 12 * renderer.getPixelRatio(),
+    });
+    let mat = makeMat(), matKind = P.material;
     let mesh = null, curve = null, builtKey = "";
 
     function buildCurve() {
@@ -76,7 +84,7 @@ export default {
         nn.sub(T.clone().multiplyScalar(nn.dot(T))).normalize();
         normals.push(nn);
       }
-      const verts = [], idx = [];
+      const verts = [], uvs = [], idx = [];
       for (let i = 0; i <= M; i++) {
         const T = tan[i], N = normals[i], B = T.clone().cross(N).normalize();
         const theta = P.twist * Math.PI * 2 * (i / M);
@@ -86,6 +94,7 @@ export default {
         const L = pos[i].clone().add(dir.clone().multiplyScalar(hw));
         const R = pos[i].clone().add(dir.clone().multiplyScalar(-hw));
         verts.push(L.x, L.y, L.z, R.x, R.y, R.z);
+        uvs.push((i / M) * 8, 0, (i / M) * 8, 1);
       }
       for (let i = 0; i < M; i++) {
         const o = i * 2;
@@ -93,16 +102,21 @@ export default {
       }
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
       geo.setIndex(idx); geo.computeVertexNormals();
+      try { geo.computeTangents(); } catch (e) { /* anisotropy falls back to derivative tangents */ }
       mesh = new THREE.Mesh(geo, mat); group.add(mesh);
     }
 
     function applyColors() {
-      mat.color = new THREE.Color(colors[0] || ink);
+      const c = new THREE.Color(colors[0] || ink);
+      if (mat.isShaderMaterial) { mat.uniforms.uInk.value.copy(c); mat.uniforms.uPaper.value.set(ground); }
+      else mat.color.copy(c);
       renderer.setClearColor(new THREE.Color(ground), 1);
     }
 
     function rebuild() {
+      if (P.material !== matKind) { mat.dispose(); mat = makeMat(); matKind = P.material; }
       const k = [seed, P.nodes].join("|");
       if (k !== builtKey) { buildCurve(); builtKey = k; }
       buildRibbon();
@@ -151,7 +165,9 @@ export default {
         running = false; cancelAnimationFrame(raf); ro.disconnect();
         canvas.removeEventListener("pointerdown", onDown); canvas.removeEventListener("pointermove", onMove);
         canvas.removeEventListener("pointerup", onUp); canvas.removeEventListener("pointerleave", onUp);
-        if (mesh) mesh.geometry.dispose(); mat.dispose(); renderer.dispose(); canvas.remove();
+        if (mesh) mesh.geometry.dispose(); mat.dispose();
+        if (scene.environment) scene.environment.dispose();
+        renderer.dispose(); canvas.remove();
       },
       snapshotCanvas() { renderer.render(scene, camera); return canvas; },
     };
