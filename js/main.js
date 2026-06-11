@@ -269,6 +269,7 @@ function renderControls() {
     <section class="exports">
       ${svgExportable ? `<button class="primary" id="expSVG">Export SVG</button>` : ""}
       <button class="${svgExportable ? "ghost" : "primary"}" id="expPNG">${e.kind === "live" ? "⤓ Freeze frame" : "PNG"}</button>
+      ${e.kind === "live" ? `<button class="ghost" id="expGIF">◉ Record GIF</button>` : ""}
     </section>`;
   wire();
 }
@@ -328,6 +329,36 @@ function wire() {
 
   const eSVG = document.getElementById("expSVG"); if (eSVG) eSVG.onclick = () => exportComposition("svg");
   const ePNG = document.getElementById("expPNG"); if (ePNG) ePNG.onclick = () => exportComposition("png");
+  const eGIF = document.getElementById("expGIF"); if (eGIF) eGIF.onclick = () => recordGifExport(eGIF);
+}
+
+// Record the live mark's motion to a looping GIF (the SVG engines are static).
+let gifBusy = false;
+async function recordGifExport(btn) {
+  if (gifBusy || !controller || !controller.snapshotCanvas) return;
+  gifBusy = true;
+  const label = btn.textContent; btn.disabled = true;
+  const c = ctx();
+  try {
+    const { recordGif } = await import("./gifExport.js");
+    const blob = await recordGif({
+      getCanvas: () => controller.snapshotCanvas(),
+      ground: c.ground,
+      onProgress: (p) => { btn.textContent = `Recording… ${Math.round(p * 100)}%`; },
+    });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `the-fold-${state.engineId}-${state.seed}.gif`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    btn.textContent = "✓ Saved GIF";
+    setTimeout(() => { btn.textContent = label; }, 1400);
+  } catch (err) {
+    console.error("GIF export failed", err);
+    alert("GIF export failed: " + (err && err.message ? err.message : err));
+    btn.textContent = label;
+  }
+  btn.disabled = false; gifBusy = false;
 }
 
 function markCustom() { const t = document.querySelector(".tag"); if (t) t.classList.add("on"); }
