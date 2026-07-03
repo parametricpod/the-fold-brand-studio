@@ -213,7 +213,7 @@ function renderControls() {
   const interactiveTools = e.interactive ? `<button class="ghost" id="clearData">Clear ${e.interactive === "draw" ? "drawing" : "points"}</button>` : "";
 
   const accentRows = state.custom.accents.map((hex, i) =>
-    `<div class="swrow"><input type="color" data-accent="${i}" value="${hex}"><code>${hex}</code><button class="x" data-rmaccent="${i}">×</button></div>`).join("");
+    `<div class="swrow"><input type="color" data-accent="${i}" value="${hex}"><input type="text" class="hexin" data-accenthex="${i}" value="${hex}" maxlength="7" spellcheck="false" autocapitalize="off"><button class="x" data-rmaccent="${i}">×</button></div>`).join("");
 
   const curatedOpt = CURATED.length ? `<optgroup label="Curated (trial)">` + CURATED.map((f) =>
       `<option value="cur:${f.id}" ${state.font.curated && state.font.id === f.id ? "selected" : ""}>${f.label}</option>`).join("") + `</optgroup>` : "";
@@ -247,8 +247,8 @@ function renderControls() {
       ${state.bw ? `<label class="toggle"><span>Invert (white on black)</span><input type="checkbox" id="bwInvert" ${state.bwInvert ? "checked" : ""}></label>` : ""}
       <div class="palette-editor" ${state.bw ? 'style="opacity:.4;pointer-events:none"' : ""}>${accentRows}</div>
       <button class="ghost sm" id="addAccent">+ color</button>
-      <div class="swrow gi"><span>Ground</span><input type="color" id="cGround" value="${state.custom.ground}"></div>
-      <div class="swrow gi"><span>Ink</span><input type="color" id="cInk" value="${state.custom.ink}"></div>
+      <div class="swrow gi"><span>Ground</span><input type="color" id="cGround" value="${state.custom.ground}"><input type="text" class="hexin" id="cGroundHex" value="${state.custom.ground}" maxlength="7" spellcheck="false" autocapitalize="off"></div>
+      <div class="swrow gi"><span>Ink</span><input type="color" id="cInk" value="${state.custom.ink}"><input type="text" class="hexin" id="cInkHex" value="${state.custom.ink}" maxlength="7" spellcheck="false" autocapitalize="off"></div>
       <div class="row">
         <button class="ghost sm" data-load="v1">Load v1</button>
         <button class="ghost sm" data-load="v2">Load v2</button>
@@ -292,7 +292,14 @@ function wire() {
   // palette editor
   document.querySelectorAll("[data-accent]").forEach((inp) => inp.oninput = () => {
     state.custom.accents[+inp.dataset.accent] = inp.value; state.register = "custom";
-    inp.parentElement.querySelector("code").textContent = inp.value; updateMark(); renderWordmark(); markCustom();
+    const t = inp.parentElement.querySelector(".hexin"); if (t) t.value = inp.value;
+    updateMark(); renderWordmark(); markCustom();
+  });
+  document.querySelectorAll("[data-accenthex]").forEach((inp) => inp.oninput = () => {
+    const v = normHex(inp.value); if (!v) return;                 // wait for a complete, valid hex
+    state.custom.accents[+inp.dataset.accenthex] = v; state.register = "custom";
+    const sw = inp.parentElement.querySelector("[data-accent]"); if (sw) sw.value = v;
+    updateMark(); renderWordmark(); markCustom();
   });
   document.querySelectorAll("[data-rmaccent]").forEach((b) => b.onclick = () => {
     if (state.custom.accents.length <= 1) return;
@@ -300,8 +307,12 @@ function wire() {
   });
   const add = document.getElementById("addAccent");
   if (add) add.onclick = () => { state.custom.accents.push("#888888"); state.register = "custom"; renderControls(); updateMark(); };
-  const cg = document.getElementById("cGround"); if (cg) cg.oninput = () => { state.custom.ground = cg.value; state.register = "custom"; updateMark(); renderWordmark(); markCustom(); };
-  const ci = document.getElementById("cInk"); if (ci) ci.oninput = () => { state.custom.ink = ci.value; state.register = "custom"; updateMark(); renderWordmark(); markCustom(); };
+  const cg = document.getElementById("cGround"), cgh = document.getElementById("cGroundHex");
+  if (cg) cg.oninput = () => { state.custom.ground = cg.value; state.register = "custom"; if (cgh) cgh.value = cg.value; updateMark(); renderWordmark(); markCustom(); };
+  if (cgh) cgh.oninput = () => { const v = normHex(cgh.value); if (!v) return; state.custom.ground = v; state.register = "custom"; if (cg) cg.value = v; updateMark(); renderWordmark(); markCustom(); };
+  const ci = document.getElementById("cInk"), cih = document.getElementById("cInkHex");
+  if (ci) ci.oninput = () => { state.custom.ink = ci.value; state.register = "custom"; if (cih) cih.value = ci.value; updateMark(); renderWordmark(); markCustom(); };
+  if (cih) cih.oninput = () => { const v = normHex(cih.value); if (!v) return; state.custom.ink = v; state.register = "custom"; if (ci) ci.value = v; updateMark(); renderWordmark(); markCustom(); };
   document.querySelectorAll("[data-load]").forEach((b) => b.onclick = () => {
     const pal = PALETTES[b.dataset.load].swatches.map((s) => s.hex);
     state.custom.accents = pal.filter((h) => h.toLowerCase() !== "#ece6e4");
@@ -362,6 +373,12 @@ async function recordGifExport(btn) {
 }
 
 function markCustom() { const t = document.querySelector(".tag"); if (t) t.classList.add("on"); }
+// Accept "#abc", "abc", "#aabbcc", "aabbcc" (any case) → "#aabbcc", else null (incomplete input).
+function normHex(s) {
+  let h = String(s).trim().replace(/^#/, "");
+  if (/^[0-9a-fA-F]{3}$/.test(h)) h = h.split("").map((c) => c + c).join("");
+  return /^[0-9a-fA-F]{6}$/.test(h) ? "#" + h.toLowerCase() : null;
+}
 function renderAll() { renderControls(); mountStage(); }
 
 renderAll();

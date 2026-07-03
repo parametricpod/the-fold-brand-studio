@@ -171,6 +171,8 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px;
 .swrow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #4a4239; }
 .swrow input[type=color] { width: 34px; height: 28px; border: 1px solid #cdbfb1; border-radius: 6px; padding: 0; background: none; cursor: pointer; }
 .swrow code { font-size: 11px; color: #8a7d6f; flex: 1; }
+.swrow .hexin { flex: 1; min-width: 0; font: inherit; font-size: 11.5px; font-family: ui-monospace, "SF Mono", Menlo, monospace; text-transform: lowercase; letter-spacing: .5px; color: var(--ink); background: #fff; border: 1px solid #cdbfb1; border-radius: 6px; padding: 5px 7px; }
+.swrow .hexin:focus { outline: none; border-color: var(--gold); }
 .swrow .x { margin-left: auto; border: 0; background: none; color: #b09a86; font-size: 16px; cursor: pointer; line-height: 1; }
 .swrow .x:hover { color: #c0392b; }
 .swrow.gi { margin-top: 6px; } .swrow.gi span { width: 56px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a7d6f; }
