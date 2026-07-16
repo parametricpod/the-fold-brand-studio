@@ -41,7 +41,7 @@ export default (() => {
       { key: "persp", label: "Perspective", min: 0, max: 1, step: 0.02, default: 0.6 },
       { key: "points", label: "Singularities", min: 1, max: 6, step: 1, default: 3 },
       { key: "streamLen", label: "Streamline length", min: 0.15, max: 1, step: 0.01, default: 0.55 },
-      { key: "mask", label: "Frame (mark)", type: "select", default: "circle", options: [
+      { key: "mask", label: "Frame (mark)", type: "select", default: "none", options: [
         { value: "none", label: "None (full field)" },
         { value: "circle", label: "Disc" },
         { value: "ring", label: "Ring" },
