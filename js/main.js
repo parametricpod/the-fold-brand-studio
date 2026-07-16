@@ -146,8 +146,13 @@ function exportComposition(kind) {
   const showWM = state.showWordmark && !e.hideWordmark;
   const wmH = showWM ? WMH : 0;
   const totalH = STAGE + wmH;
+  // Escape for XML: curated font css values contain double quotes ("cur-id"),
+  // which silently corrupt the font-family attribute and make Illustrator
+  // reject the whole file as invalid.
+  const escAttr = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const escText = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const wmSvg = showWM
-    ? `<text x="${STAGE / 2}" y="${STAGE + WMH * 0.62}" text-anchor="middle" font-family="${state.font.css}" font-weight="${state.font.weight}" font-size="150" letter-spacing="6" fill="${c.ink}">${state.wordmark}</text>`
+    ? `<text x="${STAGE / 2}" y="${STAGE + WMH * 0.62}" text-anchor="middle" font-family="${escAttr(state.font.css)}" font-weight="${state.font.weight}" font-size="150" letter-spacing="6" fill="${c.ink}">${escText(state.wordmark)}</text>`
     : "";
 
   // Vector path: SVG engines and live engines exposing snapshotSVG.

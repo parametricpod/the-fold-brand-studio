@@ -64,6 +64,7 @@ export default (() => {
         <button class="ghost sm" id="warpBank">☆ Bank pose</button>
       </div>
       <p class="blurb" style="margin:0 0 8px">Wells (○) dimple space · vortices (◐) swirl it. Drag a point, then <b>Flip type</b> to switch the last-touched one. Right-click a point to remove.</p>
+      <label class="slider"><span>Selected point · funnel depth<em id="warpSelVal">1.00</em></span><input type="range" id="warpSelDepth" min="0" max="2" step="0.05" value="1"></label>
       <div class="knot-tray" id="warpTray"></div>`;
     },
     wireControls(root) {
@@ -79,6 +80,10 @@ export default (() => {
       bind("#warpAdd", (A) => A.addPoint());
       bind("#warpType", (A) => A.flipType());
       bind("#warpBank", (A) => { A.bankPose(); renderTray(); });
+      // per-point funnel depth — bound to the last-touched singularity
+      const sd = root.querySelector("#warpSelDepth"), sv = root.querySelector("#warpSelVal");
+      if (sd) sd.oninput = () => { if (engine._active) { engine._active.setSelDepth(Number(sd.value)); if (sv) sv.textContent = Number(sd.value).toFixed(2); } };
+      engine._syncSel = (dz) => { if (sd) sd.value = dz; if (sv) sv.textContent = Number(dz).toFixed(2); };
       renderTray();
     },
     _poses: [],
@@ -92,8 +97,9 @@ export default (() => {
       host.appendChild(canvas);
       const g2 = canvas.getContext("2d");
 
-      let pts = [];              // singularities: {x,y in UV 0..1, type:'well'|'vortex', s:strength}
+      let pts = [];              // singularities: {x,y in UV 0..1, type:'well'|'vortex', s:strength, dz:depth×}
       let lastTouched = 0;
+      let pointsParam = Math.round(P.points);   // last seen value of the Singularities slider
       let uvLines = [];          // warped polylines in UV space (rebuilt on geometry change)
 
       // ---- singularity field ---------------------------------------------------
@@ -106,10 +112,13 @@ export default (() => {
           pts.push({
             x: 0.2 + 0.6 * r(), y: 0.2 + 0.6 * r(),
             type, s: (type === "well" ? -1 : 1) * (0.5 + 0.8 * r()),   // wells pull in by default
+            dz: 1,                                                      // per-point funnel depth multiplier
           });
         }
         lastTouched = 0;
+        notifySel();
       }
+      function notifySel() { if (engine._syncSel) engine._syncSel(pts[lastTouched] ? (pts[lastTouched].dz ?? 1) : 1); }
       // velocity vector of the field at a UV point — used ONLY to trace streamlines.
       function field(u, v) {
         let du = 0, dv = 0;
@@ -177,7 +186,7 @@ export default (() => {
         for (const m of pts) {
           const dx = x - m.x, dy = y - m.y;
           const g = Math.exp(-(dx * dx + dy * dy) / (2 * rz * rz));
-          z -= Math.abs(m.s) * P.depth * 0.9 * g * (m.type === "vortex" ? 0.85 : 1);
+          z -= Math.abs(m.s) * P.depth * (m.dz ?? 1) * 0.9 * g * (m.type === "vortex" ? 0.85 : 1);
         }
         return z;
       }
@@ -362,7 +371,7 @@ export default (() => {
       const onDown = (e) => {
         if (!P.handles) return;
         const i = hit(e);
-        if (i >= 0) { dragging = i; lastTouched = i; lastUV = uvAt(e); canvas.setPointerCapture?.(e.pointerId); draw(true); }
+        if (i >= 0) { dragging = i; lastTouched = i; lastUV = uvAt(e); canvas.setPointerCapture?.(e.pointerId); notifySel(); draw(true); }
       };
       const onMove = (e) => {
         if (dragging < 0) return;
@@ -376,7 +385,7 @@ export default (() => {
       };
       const onUp = () => { dragging = -1; };
       const onContext = (e) => {                 // right-click removes the point under the cursor
-        if (!P.handles) return; const i = hit(e); if (i >= 0 && pts.length > 1) { e.preventDefault(); pts.splice(i, 1); lastTouched = 0; buildLines(); draw(true); }
+        if (!P.handles) return; const i = hit(e); if (i >= 0 && pts.length > 1) { e.preventDefault(); pts.splice(i, 1); lastTouched = 0; notifySel(); buildLines(); draw(true); }
       };
       canvas.addEventListener("pointerdown", onDown);
       canvas.addEventListener("pointermove", onMove);
@@ -407,13 +416,14 @@ export default (() => {
       }
       engine._active = {
         mutate() { const r = rng((seed * 7 + pts.length * 131 + lastTouched) >>> 0); pts.forEach((m) => { m.x = clamp01(m.x + (r() - 0.5) * 0.18); m.y = clamp01(m.y + (r() - 0.5) * 0.18); m.s *= 0.8 + 0.4 * r(); }); buildLines(); draw(true); },
-        addPoint() { if (pts.length >= 8) return; pts.push({ x: 0.5, y: 0.5, type: "well", s: -0.9 }); lastTouched = pts.length - 1; buildLines(); draw(true); },
+        addPoint() { if (pts.length >= 8) return; pts.push({ x: 0.5, y: 0.5, type: "well", s: -0.9, dz: 1 }); lastTouched = pts.length - 1; notifySel(); buildLines(); draw(true); },
         flipType() { const m = pts[lastTouched]; if (!m) return; m.type = m.type === "well" ? "vortex" : "well"; m.s = (m.type === "well" ? -1 : 1) * Math.abs(m.s); buildLines(); draw(true); },
+        setSelDepth(v) { const m = pts[lastTouched]; if (!m) return; m.dz = v; draw(true); },   // z is applied at projection — no rebuild needed
         bankPose() {
           engine._poses.unshift({ thumb: thumb(), seed, pts: pts.map((m) => ({ ...m })), params: { ...P } });
           engine._poses = engine._poses.slice(0, 12);
         },
-        restore(pose) { seed = pose.seed; pts = pose.pts.map((m) => ({ ...m })); Object.assign(P, pose.params); buildLines(); draw(true); },
+        restore(pose) { seed = pose.seed; pts = pose.pts.map((m) => ({ ...m })); Object.assign(P, pose.params); pointsParam = Math.round(P.points); lastTouched = 0; notifySel(); buildLines(); draw(true); },
       };
 
       return {
@@ -421,8 +431,11 @@ export default (() => {
         update(nc) {
           const reseed = nc.seed !== seed;
           P = nc.params; colors = nc.colors; ink = nc.ink; ground = nc.ground;
-          if (reseed) { seed = nc.seed; rebuild(true); }               // ⟳ New seed → rescatter singularities
-          else if (Math.round(P.points) !== pts.length) { makePoints(); buildLines(); draw(true); }
+          // Regenerate points only when the seed OR the Singularities slider itself
+          // changes — never because pts.length drifted from a manual add/delete
+          // (that comparison used to resurrect right-click-deleted points on any tweak).
+          if (reseed) { seed = nc.seed; pointsParam = Math.round(P.points); rebuild(true); }
+          else if (Math.round(P.points) !== pointsParam) { pointsParam = Math.round(P.points); makePoints(); buildLines(); draw(true); }
           else { buildLines(); draw(true); }
         },
         snapshotSVG,

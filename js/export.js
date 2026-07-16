@@ -3,7 +3,9 @@
 export function downloadSVG(svgEl, filename = "the-fold-mark.svg") {
   const clone = svgEl.cloneNode(true);
   clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-  const src = '<?xml version="1.0" encoding="UTF-8"?>\n' + clone.outerHTML;
+  // XMLSerializer emits strict XML (self-closed tags, escaped entities) —
+  // outerHTML uses HTML serialization rules, which Illustrator can reject.
+  const src = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(clone);
   triggerDownload(new Blob([src], { type: "image/svg+xml" }), filename);
 }
 
