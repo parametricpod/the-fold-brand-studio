@@ -10,7 +10,7 @@
 //
 // Live view renders to a 2D canvas (fast with thousands of segments); snapshotSVG
 // re-emits the identical warped polylines as vector paths under the same clip.
-import { rng } from "../util.js";
+import { rng, smoothPath } from "../util.js";
 
 const STAGE = 1080;
 const TAU = Math.PI * 2;
@@ -107,7 +107,7 @@ export default (() => {
         }
         lastTouched = 0;
       }
-      // displacement/velocity vector of the field at a UV point
+      // velocity vector of the field at a UV point — used ONLY to trace streamlines.
       function field(u, v) {
         let du = 0, dv = 0;
         const rad = P.falloff;
@@ -128,9 +128,38 @@ export default (() => {
         const s = Math.sin((u * 127.1 + v * 311.7 + k * 74.7)) * 43758.5453;
         return ((s - Math.floor(s)) - 0.5) * P.jitter * 0.012;
       };
+      // Warp the lattice/polar grids with a SMOOTH space deformation — the logomark-
+      // quality guarantee. Vortices ROTATE points around themselves by an angle that
+      // decays with distance (a rotation can never tear or fling lines off), and wells
+      // SCALE the radius toward/away from their center by a clamped factor (a point can
+      // shrink toward the center but never overshoot past it — no fold-through, no
+      // space inversion). Composed over a few substeps so multiple singularities blend
+      // as one continuous deformation instead of fighting each other.
+      const SUB = 3;
       function warpUV(u, v) {
-        const [du, dv] = field(u, v);
-        return [u + P.warp * du + jit(u, v, 1), v + P.warp * dv + jit(u, v, 2)];
+        let x = u, y = v;
+        const rad = P.falloff;
+        for (let s = 0; s < SUB; s++) {
+          let dx = 0, dy = 0;
+          for (const m of pts) {
+            const vx = x - m.x, vy = y - m.y;
+            const d2 = vx * vx + vy * vy;
+            const g = Math.exp(-d2 / (2 * rad * rad));
+            if (m.type === "vortex") {
+              const ang = (m.s * P.swirl * 1.4 * g) / SUB;          // rotate about the vortex
+              const ca = Math.cos(ang), sa = Math.sin(ang);
+              dx += (vx * ca - vy * sa) - vx;
+              dy += (vx * sa + vy * ca) - vy;
+            } else {
+              // radial scale: r' = r·(1+k). k ∈ (−0.94, 0.94) per substep total, so the
+              // pinch can be extreme but the map stays monotonic — lines bunch, never cross.
+              const k = Math.max(-0.94, Math.min(0.94, m.s * P.warp * g)) / SUB;
+              dx += vx * k; dy += vy * k;
+            }
+          }
+          x += dx; y += dy;
+        }
+        return [x + jit(u, v, 1), y + jit(u, v, 2)];
       }
 
       // ---- geometry: warped polylines in UV -----------------------------------
@@ -236,8 +265,20 @@ export default (() => {
         g2.strokeStyle = lineColor(); g2.globalAlpha = P.opacity; g2.lineWidth = P.weight;
         g2.lineJoin = "round"; g2.lineCap = "round";
         g2.beginPath();
+        // midpoint-quadratic smoothing: pass through segment midpoints with each sample
+        // as the control point — no visible facets even where the warp is violent.
         for (const ln of uvLines) {
-          for (let i = 0; i < ln.length; i++) { const [x, y] = mapUV(ln[i], size); if (i === 0) g2.moveTo(x, y); else g2.lineTo(x, y); }
+          const n = ln.length;
+          if (n < 2) continue;
+          let [x0, y0] = mapUV(ln[0], size);
+          g2.moveTo(x0, y0);
+          for (let i = 1; i < n - 1; i++) {
+            const [cx, cy] = mapUV(ln[i], size);
+            const [nx, ny] = mapUV(ln[i + 1], size);
+            g2.quadraticCurveTo(cx, cy, (cx + nx) / 2, (cy + ny) / 2);
+          }
+          const [xe, ye] = mapUV(ln[n - 1], size);
+          g2.lineTo(xe, ye);
         }
         g2.stroke();
         g2.restore();
@@ -297,8 +338,9 @@ export default (() => {
         const col = lineColor();
         const mask = maskShape(STAGE, true);
         const paths = uvLines.map((ln) => {
-          let d = "";
-          for (let i = 0; i < ln.length; i++) { const [x, y] = mapUV(ln[i], STAGE); d += (i === 0 ? "M " : " L ") + x.toFixed(1) + " " + y.toFixed(1); }
+          // Catmull-Rom → cubic Bézier, same smoothing family as the live view: the
+          // exported vector is genuinely smooth curves, not faceted polylines.
+          const d = smoothPath(ln.map(([u, v]) => { const [x, y] = mapUV([u, v], STAGE); return { x, y }; }), { tension: 0.5 });
           return `<path d="${d}" fill="none" stroke="${col}" stroke-width="${P.weight}" stroke-opacity="${P.opacity}" stroke-linejoin="round" stroke-linecap="round"/>`;
         }).join("");
         if (!mask) return paths;
