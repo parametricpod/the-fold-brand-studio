@@ -32,10 +32,13 @@ export default (() => {
         { value: "stream", label: "Streamlines" },
       ] },
       { key: "lines", label: "Line count / spacing", min: 8, max: 140, step: 1, default: 44 },
-      { key: "res", label: "Smoothness", min: 20, max: 140, step: 2, default: 64 },
+      { key: "res", label: "Smoothness", min: 20, max: 160, step: 2, default: 84 },
       { key: "warp", label: "Warp strength", min: 0, max: 1.6, step: 0.02, default: 0.7 },
       { key: "falloff", label: "Well radius", min: 0.05, max: 0.6, step: 0.01, default: 0.24 },
-      { key: "swirl", label: "Vortex swirl", min: 0, max: 1.6, step: 0.02, default: 0.7 },
+      { key: "swirl", label: "Vortex swirl", min: 0, max: 3, step: 0.02, default: 1 },
+      { key: "depth", label: "Funnel depth", min: 0, max: 1, step: 0.02, default: 0.55 },
+      { key: "tilt", label: "View tilt", min: 0, max: 1.3, step: 0.02, default: 0.35 },
+      { key: "persp", label: "Perspective", min: 0, max: 1, step: 0.02, default: 0.6 },
       { key: "points", label: "Singularities", min: 1, max: 6, step: 1, default: 3 },
       { key: "streamLen", label: "Streamline length", min: 0.15, max: 1, step: 0.01, default: 0.55 },
       { key: "mask", label: "Frame (mark)", type: "select", default: "circle", options: [
@@ -146,7 +149,7 @@ export default (() => {
             const d2 = vx * vx + vy * vy;
             const g = Math.exp(-d2 / (2 * rad * rad));
             if (m.type === "vortex") {
-              const ang = (m.s * P.swirl * 1.4 * g) / SUB;          // rotate about the vortex
+              const ang = (m.s * P.swirl * 2.2 * g) / SUB;          // rotate about the vortex — can wrap full turns
               const ca = Math.cos(ang), sa = Math.sin(ang);
               dx += (vx * ca - vy * sa) - vx;
               dy += (vx * sa + vy * ca) - vy;
@@ -161,6 +164,48 @@ export default (() => {
         }
         return [x + jit(u, v, 1), y + jit(u, v, 2)];
       }
+
+      // ---- the third dimension: what makes the sheet FOLD BACK ON ITSELF --------
+      // The 2D warp alone can bunch lines but never overlap them (a smooth planar map
+      // has no folds). The time-warp-tunnel look comes from treating the grid as a 3D
+      // SHEET: every singularity digs a funnel in z, the sheet is tilted toward the
+      // camera, and perspective projects it back to 2D — near funnel walls swallow far
+      // ones, and the surface self-overlaps as smoothly as draped fabric.
+      function zAt(x, y) {
+        let z = 0;
+        const rz = P.falloff * 0.72;                 // funnel narrower than the in-plane pinch → steep walls, real tunnels
+        for (const m of pts) {
+          const dx = x - m.x, dy = y - m.y;
+          const g = Math.exp(-(dx * dx + dy * dy) / (2 * rz * rz));
+          z -= Math.abs(m.s) * P.depth * 0.9 * g * (m.type === "vortex" ? 0.85 : 1);
+        }
+        return z;
+      }
+      // warped-UV point → tilted, perspective-projected unit coords
+      function place(pt) {
+        const z = zAt(pt[0], pt[1]);
+        const cx = pt[0] - 0.5, cy = pt[1] - 0.5;
+        const ct = Math.cos(P.tilt), st = Math.sin(P.tilt);
+        const y2 = cy * ct - z * st;
+        const z2 = cy * st + z * ct;
+        const f = 1 / Math.max(0.2, 1 + z2 * P.persp * 1.1);
+        return [0.5 + cx * f, 0.5 + y2 * f];
+      }
+      // Project every line, then normalize to a centered, frame-filling composition —
+      // tilt/depth reshape the sheet, but the MARK always sits centered at full size.
+      function projectAll() {
+        const raw = uvLines.map((ln) => ln.map(place));
+        let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+        for (const ln of raw) for (const [x, y] of ln) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+        const s = 0.94 / Math.max(1e-6, Math.max(maxX - minX, maxY - minY));
+        const ox = 0.5 - s * (minX + maxX) / 2, oy = 0.5 - s * (minY + maxY) / 2;
+        const fit = (p) => [p[0] * s + ox, p[1] * s + oy];
+        return { plines: raw.map((ln) => ln.map(fit)), fit };
+      }
+      let lastFit = (p) => p;                        // handles & hit-testing share the current fit
 
       // ---- geometry: warped polylines in UV -----------------------------------
       function buildLines() {
@@ -267,17 +312,18 @@ export default (() => {
         g2.beginPath();
         // midpoint-quadratic smoothing: pass through segment midpoints with each sample
         // as the control point — no visible facets even where the warp is violent.
-        for (const ln of uvLines) {
-          const n = ln.length;
+        const proj = projectAll(); lastFit = proj.fit;
+        for (const pl of proj.plines) {
+          const n = pl.length;
           if (n < 2) continue;
-          let [x0, y0] = mapUV(ln[0], size);
+          let [x0, y0] = mapUV(pl[0], size);
           g2.moveTo(x0, y0);
           for (let i = 1; i < n - 1; i++) {
-            const [cx, cy] = mapUV(ln[i], size);
-            const [nx, ny] = mapUV(ln[i + 1], size);
+            const [cx, cy] = mapUV(pl[i], size);
+            const [nx, ny] = mapUV(pl[i + 1], size);
             g2.quadraticCurveTo(cx, cy, (cx + nx) / 2, (cy + ny) / 2);
           }
-          const [xe, ye] = mapUV(ln[n - 1], size);
+          const [xe, ye] = mapUV(pl[n - 1], size);
           g2.lineTo(xe, ye);
         }
         g2.stroke();
@@ -286,7 +332,7 @@ export default (() => {
       }
       function drawHandles(size) {
         pts.forEach((m, i) => {
-          const [x, y] = mapUV([m.x, m.y], size);
+          const [x, y] = mapUV(lastFit(place(warpUV(m.x, m.y))), size);   // sit on the projected funnel
           g2.globalAlpha = 1; g2.lineWidth = 2;
           g2.strokeStyle = m.type === "vortex" ? "#c9a24a" : "#3a6b5f";
           g2.fillStyle = i === lastTouched ? g2.strokeStyle : "rgba(255,255,255,.85)";
@@ -309,18 +355,23 @@ export default (() => {
       const hit = (e) => {
         const r = canvas.getBoundingClientRect(); const size = Math.min(r.width, r.height);
         let best = -1, bd = 16;
-        pts.forEach((m, i) => { const [hx, hy] = mapUV([m.x, m.y], size); const d = Math.hypot(e.clientX - r.left - hx, e.clientY - r.top - hy); if (d < bd) { bd = d; best = i; } });
+        pts.forEach((m, i) => { const [hx, hy] = mapUV(lastFit(place(warpUV(m.x, m.y))), size); const d = Math.hypot(e.clientX - r.left - hx, e.clientY - r.top - hy); if (d < bd) { bd = d; best = i; } });
         return best;
       };
+      let lastUV = null;
       const onDown = (e) => {
         if (!P.handles) return;
         const i = hit(e);
-        if (i >= 0) { dragging = i; lastTouched = i; canvas.setPointerCapture?.(e.pointerId); draw(true); }
+        if (i >= 0) { dragging = i; lastTouched = i; lastUV = uvAt(e); canvas.setPointerCapture?.(e.pointerId); draw(true); }
       };
       const onMove = (e) => {
         if (dragging < 0) return;
+        // delta drag — under tilt/perspective the cursor's absolute UV no longer maps
+        // 1:1 onto the sheet, but relative motion still feels exact.
         const [u, v] = uvAt(e);
-        pts[dragging].x = clamp01(u); pts[dragging].y = clamp01(v);
+        pts[dragging].x = clamp01(pts[dragging].x + (u - lastUV[0]));
+        pts[dragging].y = clamp01(pts[dragging].y + (v - lastUV[1]));
+        lastUV = [u, v];
         buildLines(); draw(true);
       };
       const onUp = () => { dragging = -1; };
@@ -337,10 +388,10 @@ export default (() => {
       function snapshotSVG() {
         const col = lineColor();
         const mask = maskShape(STAGE, true);
-        const paths = uvLines.map((ln) => {
+        const paths = projectAll().plines.map((ln) => {
           // Catmull-Rom → cubic Bézier, same smoothing family as the live view: the
           // exported vector is genuinely smooth curves, not faceted polylines.
-          const d = smoothPath(ln.map(([u, v]) => { const [x, y] = mapUV([u, v], STAGE); return { x, y }; }), { tension: 0.5 });
+          const d = smoothPath(ln.map((pt) => { const [x, y] = mapUV(pt, STAGE); return { x, y }; }), { tension: 0.5 });
           return `<path d="${d}" fill="none" stroke="${col}" stroke-width="${P.weight}" stroke-opacity="${P.opacity}" stroke-linejoin="round" stroke-linecap="round"/>`;
         }).join("");
         if (!mask) return paths;
