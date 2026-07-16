@@ -9,6 +9,7 @@ let CURATED = [];
 import cloth from "./engines/cloth.js";
 import ribbon from "./engines/ribbon3d.js";
 import knot from "./engines/knotLab.js";
+import warp from "./engines/warpLab.js";
 import letter from "./engines/letterWrap.js";
 import scope from "./engines/oscilloscope.js";
 import flow from "./engines/flowField.js";
@@ -17,7 +18,7 @@ import graph from "./engines/graph.js";
 
 loadFonts();
 
-const ENGINES = [scope, ribbon, knot, letter, cloth, flow, quilt, graph];
+const ENGINES = [scope, ribbon, knot, warp, letter, cloth, flow, quilt, graph];
 const STAGE = 1080;
 const WMH = 240;
 
