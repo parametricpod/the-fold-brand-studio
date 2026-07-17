@@ -63,7 +63,7 @@ export default (() => {
         <button class="ghost sm" id="warpType">↻ Flip type</button>
         <button class="ghost sm" id="warpBank">☆ Bank pose</button>
       </div>
-      <p class="blurb" style="margin:0 0 8px">Wells (○) dimple space · vortices (◐) swirl it. Drag a point, then <b>Flip type</b> to switch the last-touched one. Right-click a point to remove.</p>
+      <p class="blurb" style="margin:0 0 8px">Wells (○) dimple space · vortices (◐) swirl it · twists (⌁ rust, with axis tick) flip the plane over like a twisted ribbon. Drag a point, then <b>Flip type</b> to cycle the last-touched one (○→◐→⌁). Right-click a point to remove.</p>
       <label class="slider"><span>Selected point · funnel depth<em id="warpSelVal">1.00</em></span><input type="range" id="warpSelDepth" min="0" max="2" step="0.05" value="1"></label>
       <div class="knot-tray" id="warpTray"></div>`;
     },
@@ -108,10 +108,12 @@ export default (() => {
         const n = Math.round(P.points);
         pts = [];
         for (let i = 0; i < n; i++) {
-          const type = r() < 0.5 ? "well" : "vortex";
+          const roll = r();
+          const type = roll < 0.42 ? "well" : roll < 0.78 ? "vortex" : "twist";
           pts.push({
             x: 0.2 + 0.6 * r(), y: 0.2 + 0.6 * r(),
             type, s: (type === "well" ? -1 : 1) * (0.5 + 0.8 * r()),   // wells pull in by default
+            a: r() * Math.PI,                                           // twist axis angle (twist type only)
             dz: 1,                                                      // per-point funnel depth multiplier
           });
         }
@@ -129,6 +131,13 @@ export default (() => {
           if (m.type === "vortex") {
             du += (-vy / d) * g * P.swirl + (vx / d) * g * -0.35;   // swirl + a mild inward pull → spiral
             dv += (vx / d) * g * P.swirl + (vy / d) * g * -0.35;
+          } else if (m.type === "twist") {
+            // shear: flow runs along the twist axis, reversing across it — streamlines
+            // sweep past in opposite directions, the flow-field read of a ribbon twist
+            const axc = Math.cos(m.a || 0), axs = Math.sin(m.a || 0);
+            const q = -vx * axs + vy * axc;
+            const sh = Math.tanh(q / (P.falloff * 0.6)) * g;
+            du += axc * sh; dv += axs * sh;
           } else {
             du += (vx / d) * g; dv += (vy / d) * g;
           }
@@ -154,6 +163,7 @@ export default (() => {
         for (let s = 0; s < SUB; s++) {
           let dx = 0, dy = 0;
           for (const m of pts) {
+            if (m.type === "twist") continue;                          // twists apply exactly, after this loop
             const vx = x - m.x, vy = y - m.y;
             const d2 = vx * vx + vy * vy;
             const g = Math.exp(-d2 / (2 * rad * rad));
@@ -171,7 +181,28 @@ export default (() => {
           }
           x += dx; y += dy;
         }
-        return [x + jit(u, v, 1), y + jit(u, v, 2)];
+        // Twist points: the ribbon flip. The sheet rotates about an axis LYING IN THE
+        // PLANE through the point — travelling along that axis, the cross-section turns
+        // from 0 to ~180°: lines pinch edge-on at the twist, lift out of the plane, and
+        // come out MIRRORED on the far side, exactly like a twisted ribbon. Windowed
+        // across the axis so the flip blends into the surrounding sheet. Applied as an
+        // exact rotation (not substepped) and carries real z for the fold-over.
+        let zt = 0;
+        for (const m of pts) {
+          if (m.type !== "twist") continue;
+          const axc = Math.cos(m.a || 0), axs = Math.sin(m.a || 0);
+          const vx = x - m.x, vy = y - m.y;
+          const along = vx * axc + vy * axs;                 // position along the twist axis
+          const q = -vx * axs + vy * axc;                    // offset across it
+          const ramp = 0.5 * (1 + Math.tanh(along / (P.falloff * 0.55)));
+          const win = Math.exp(-(q * q) / (2 * Math.pow(P.falloff * 1.7, 2)));
+          const phi = m.s * Math.PI * ramp * win;            // ~±180° on the far side of the point
+          const q2 = q * Math.cos(phi);
+          zt += q * Math.sin(phi) * (m.dz ?? 1) * (0.35 + 0.65 * P.depth);
+          x = m.x + axc * along - axs * q2;
+          y = m.y + axs * along + axc * q2;
+        }
+        return [x + jit(u, v, 1), y + jit(u, v, 2), zt];
       }
 
       // ---- the third dimension: what makes the sheet FOLD BACK ON ITSELF --------
@@ -184,6 +215,7 @@ export default (() => {
         let z = 0;
         const rz = P.falloff * 0.72;                 // funnel narrower than the in-plane pinch → steep walls, real tunnels
         for (const m of pts) {
+          if (m.type === "twist") continue;                  // twists carry their own z in warpUV
           const dx = x - m.x, dy = y - m.y;
           const g = Math.exp(-(dx * dx + dy * dy) / (2 * rz * rz));
           z -= Math.abs(m.s) * P.depth * (m.dz ?? 1) * 0.9 * g * (m.type === "vortex" ? 0.85 : 1);
@@ -192,7 +224,7 @@ export default (() => {
       }
       // warped-UV point → tilted, perspective-projected unit coords
       function place(pt) {
-        const z = zAt(pt[0], pt[1]);
+        const z = zAt(pt[0], pt[1]) + (pt[2] || 0);          // funnels + any ribbon-twist lift
         const cx = pt[0] - 0.5, cy = pt[1] - 0.5;
         const ct = Math.cos(P.tilt), st = Math.sin(P.tilt);
         const y2 = cy * ct - z * st;
@@ -343,10 +375,14 @@ export default (() => {
         pts.forEach((m, i) => {
           const [x, y] = mapUV(lastFit(place(warpUV(m.x, m.y))), size);   // sit on the projected funnel
           g2.globalAlpha = 1; g2.lineWidth = 2;
-          g2.strokeStyle = m.type === "vortex" ? "#c9a24a" : "#3a6b5f";
+          g2.strokeStyle = m.type === "vortex" ? "#c9a24a" : m.type === "twist" ? "#a04a3a" : "#3a6b5f";
           g2.fillStyle = i === lastTouched ? g2.strokeStyle : "rgba(255,255,255,.85)";
           g2.beginPath(); g2.arc(x, y, 7, 0, TAU); g2.fill(); g2.stroke();
           if (m.type === "vortex") { g2.beginPath(); g2.arc(x, y, 7, -Math.PI / 2, Math.PI / 2); g2.fillStyle = g2.strokeStyle; g2.fill(); }
+          if (m.type === "twist") {                     // axis tick through the dot — the fold line
+            const ac = Math.cos(m.a || 0), as = Math.sin(m.a || 0);
+            g2.beginPath(); g2.moveTo(x - ac * 13, y - as * 13); g2.lineTo(x + ac * 13, y + as * 13); g2.stroke();
+          }
         });
       }
 
@@ -415,9 +451,15 @@ export default (() => {
         return t.toDataURL("image/png");
       }
       engine._active = {
-        mutate() { const r = rng((seed * 7 + pts.length * 131 + lastTouched) >>> 0); pts.forEach((m) => { m.x = clamp01(m.x + (r() - 0.5) * 0.18); m.y = clamp01(m.y + (r() - 0.5) * 0.18); m.s *= 0.8 + 0.4 * r(); }); buildLines(); draw(true); },
+        mutate() { const r = rng((seed * 7 + pts.length * 131 + lastTouched) >>> 0); pts.forEach((m) => { m.x = clamp01(m.x + (r() - 0.5) * 0.18); m.y = clamp01(m.y + (r() - 0.5) * 0.18); m.s *= 0.8 + 0.4 * r(); if (m.type === "twist") m.a = (m.a || 0) + (r() - 0.5) * 0.7; }); buildLines(); draw(true); },
         addPoint() { if (pts.length >= 8) return; pts.push({ x: 0.5, y: 0.5, type: "well", s: -0.9, dz: 1 }); lastTouched = pts.length - 1; notifySel(); buildLines(); draw(true); },
-        flipType() { const m = pts[lastTouched]; if (!m) return; m.type = m.type === "well" ? "vortex" : "well"; m.s = (m.type === "well" ? -1 : 1) * Math.abs(m.s); buildLines(); draw(true); },
+        flipType() {
+          const m = pts[lastTouched]; if (!m) return;
+          m.type = m.type === "well" ? "vortex" : m.type === "vortex" ? "twist" : "well";   // ○ → ◐ → ⌁ → ○
+          if (m.type === "twist" && m.a === undefined) m.a = 0;
+          m.s = (m.type === "well" ? -1 : 1) * Math.max(0.7, Math.abs(m.s));
+          buildLines(); draw(true);
+        },
         setSelDepth(v) { const m = pts[lastTouched]; if (!m) return; m.dz = v; draw(true); },   // z is applied at projection — no rebuild needed
         bankPose() {
           engine._poses.unshift({ thumb: thumb(), seed, pts: pts.map((m) => ({ ...m })), params: { ...P } });
